@@ -1,0 +1,48 @@
+# PSA token refresh for evcc - HA automation + REST commands
+#
+# This file is a template: copy the contents into configuration.yaml or
+# automations.yaml and adjust it.
+#
+# Requirements:
+#   - The add-on "Stellantis/PSA Token Refresh for evcc" has 'trigger_token' set (e.g. 32 chars).
+#   - secrets.yaml holds the same value:
+#         psa_trigger_token: "your-long-random-token"
+#   - Replace the IP of the Home Assistant host below (Settings > System > Network).
+
+rest_command:
+  # Trigger a refresh (the answer arrives asynchronously via notification)
+  psa_token_refresh:
+    url: "http://192.168.1.10:8909/refresh"
+    method: POST
+    content_type: "application/json"
+    payload: '{"reason": "Home Assistant automation"}'
+    headers:
+      X-Trigger-Token: !secret psa_trigger_token
+    timeout: 20
+
+  # Query the status (see the REST sensor below)
+  psa_token_status:
+    url: "http://192.168.1.10:8909/status"
+    method: GET
+    headers:
+      X-Trigger-Token: !secret psa_trigger_token
+    timeout: 20
+
+# Optional: status as an entity so it can be shown on a dashboard
+sensor:
+  - platform: rest
+    name: "PSA Token Refresh Status"
+    resource: "http://192.168.1.10:8909/status"
+    method: GET
+    headers:
+      X-Trigger-Token: !secret psa_trigger_token
+    value_template: >-
+      {% set s = value_json.state %}
+      {{ 'ok' if s.last_success_ts else 'never run yet' }}
+    json_attributes:
+      - version
+      - mode_resolved
+      - evcc_config_dirty
+      - charging
+      - state
+    scan_interval: 3600

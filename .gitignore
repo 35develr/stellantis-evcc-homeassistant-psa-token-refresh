@@ -1,0 +1,12 @@
+# Not in the repository (runtime data, artifacts)
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.tmp
+*.tmp-psa-refresh
+state.json
+options.json
+dryrun-*.json
+dryrun-*.yaml
+backups/

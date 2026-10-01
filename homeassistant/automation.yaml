@@ -1,0 +1,56 @@
+# Automatically renew PSA tokens - automations (template, copy into automations.yaml)
+#
+# The add-on already does the scheduling itself (interval + proactive days).
+# These automations are meant for the event "vehicle is no longer reachable in
+# Home Assistant" and for the manual button.
+
+- id: psa_token_refresh_bei_fahrzeugfehler
+  alias: "Renew PSA tokens when a vehicle is no longer reachable"
+  description: >-
+    Reacts when the evcc vehicle entity stays unknown/unavailable for a while.
+    Adjust the entity IDs below (Developer Tools > States > filter by 'evcc').
+    The add-on itself prevents duplicate runs (409 'busy') and pauses while a
+    charge is in progress.
+  mode: single
+  max_excess: 1
+  trigger:
+    - platform: state
+      entity_id: sensor.evcc_e3008_soc
+      to:
+        - "unavailable"
+        - "unknown"
+      for: "00:20:00"
+    - platform: state
+      entity_id: sensor.evcc_e5008_soc
+      to:
+        - "unavailable"
+        - "unknown"
+      for: "00:20:00"
+  action:
+    - service: rest_command.psa_token_refresh
+      data:
+        reason: "vehicle SoC unknown"
+    - delay: "00:00:05"
+    - service: persistent_notification.create
+      data:
+        notification_id: psa_token_refresh_angestossen
+        title: "PSA token refresh started"
+        message: >-
+          A vehicle was unreachable for a while. The token renewal is now
+          running in the add-on; the result arrives as its own notification.
+
+- id: psa_token_refresh_nach_ha_neustart
+  alias: "Check PSA tokens after a Home Assistant restart"
+  description: >-
+    After an HA restart evcc often still runs with old tokens in its log.
+    Trigger the add-on's self-check once (the add-on decides for itself
+    whether a renewal is really needed - no login runs if everything is fine).
+  mode: single
+  trigger:
+    - platform: homeassistant
+      event: start
+  action:
+    - delay: "00:02:00"
+    - service: rest_command.psa_token_refresh
+      data:
+        reason: "HA restart"

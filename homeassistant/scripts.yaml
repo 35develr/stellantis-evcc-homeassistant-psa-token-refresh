@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Manual button + status check for the PSA token refresh (copy into scripts.yaml).
+#
+#   script.psa_token_refresh      -> trigger a refresh
+#   script.psa_token_refresh_dump -> log the planned evcc change
+
+psa_token_refresh:
+  alias: "Renew PSA tokens now"
+  sequence:
+    - service: rest_command.psa_token_refresh
+      data:
+        reason: "triggered manually"
+    - service: persistent_notification.create
+      data:
+        notification_id: psa_token_refresh_manuell
+        title: "PSA token refresh started"
+        message: "The add-on is now fetching new tokens. The result follows as a notification."
+
+psa_token_refresh_status:
+  alias: "Query PSA token refresh status"
+  sequence:
+    - service: homeassistant.update_entity
+      target:
+        entity_id: sensor.psa_token_refresh_status

@@ -1,0 +1,107 @@
+name: "Stellantis/PSA Token Refresh for evcc"
+version: "1.4.11"
+slug: "psa_token_refresh"
+description: >-
+  Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
+  when evcc reports that they have expired - for vehicles configured in the
+  evcc UI (configuration API) and for vehicles from evcc.yaml.
+url: "https://github.com/yourname/stellantis-evcc-homeassistant-psa-token-refresh"
+arch:
+  - amd64
+init: false
+startup: application
+boot: auto
+# Access to the evcc add-on (stop/start) and to the neighbouring add-on configs
+host_network: true
+hassio_api: true
+hassio_role: manager
+# for notifications in Home Assistant (POST /core/api/services/...)
+homeassistant_api: true
+map:
+  - type: all_addon_configs
+    read_only: false
+
+options:
+  # --- Mode ------------------------------------------------------------------
+  # auto = vehicles from the evcc UI/DB are managed via the evcc API, otherwise evcc.yaml
+  mode: auto
+  # --- PSA account -----------------------------------------------------------
+  brand: peugeot
+  account_user: ""
+  account_password: ""
+  country: de
+  # --- Vehicles (names as in evcc: title or name) ----------------------------
+  vehicles:
+    - name: e3008
+      vin: ""
+    - name: e5008
+      vin: ""
+  # --- evcc ------------------------------------------------------------------
+  evcc_url: "http://127.0.0.1:7070"
+  # API key: enter *** here OR set the admin password below -
+  # the add-on then creates the key itself and stores it in /data/evcc_apikey.
+  evcc_apikey: ""
+  evcc_admin_password: ""
+  evcc_user: ""
+  evcc_apikey_auto: true
+  # true = if evcc has NO admin password yet: create the password above in evcc
+  evcc_set_admin_password: false
+  # empty/"auto" = slug is looked up automatically (e.g. "evcc" or "a1b2c3d4-evcc")
+  evcc_slug: 
+  evcc_config_path: auto
+  api_verify_with_test: true
+  api_payload_nested: false
+  # --- Scheduling ------------------------------------------------------------
+  check_interval_minutes: 60
+  proactive_refresh_days: 30
+  retry_backoff_minutes: 30
+  verify_delay_seconds: 45
+  # How long to wait after an evcc restart until evcc answers on its port again
+  # (otherwise Home Assistant answers there and returns 404).
+  evcc_ready_timeout: 150
+  # --- Behaviour -------------------------------------------------------------
+  rotate_user_key: true
+  skip_while_charging: true
+  helper_timeout: 45
+  helper_deadline: 240
+  # helper that performs the PSA login and returns the tokens
+  helper_cmd: "python3 /app/psa-browser-token.py"
+  trigger_port: 8909
+  trigger_token: ""
+  notify: true
+  dry_run: false
+
+schema:
+  mode: list(auto|api|yaml)
+  brand: list(citroen|ds|opel|peugeot)
+  account_user: str
+  account_password: password
+  country: str
+  vehicles:
+    - name: str
+      vin: str?
+      id: int?
+  evcc_url: str
+  evcc_apikey: password?
+  evcc_admin_password: password?
+  evcc_user: str?
+  evcc_apikey_auto: bool
+  evcc_set_admin_password: bool
+  evcc_slug: str?
+  evcc_config_path: str
+  api_verify_with_test: bool
+  api_payload_nested: bool
+  check_interval_minutes: int(5,1440)
+  proactive_refresh_days: int(0,365)
+  retry_backoff_minutes: int(5,1440)
+  verify_delay_seconds: int(10,600)
+  evcc_ready_timeout: int(10,600)
+  rotate_user_key: bool
+  skip_while_charging: bool
+  helper_timeout: int(15,300)
+  helper_deadline: int(60,900)
+  helper_cmd: str
+  trigger_port: port
+  trigger_token: password?
+  notify: bool
+  dry_run: bool
