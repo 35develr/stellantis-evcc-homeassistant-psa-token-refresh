@@ -70,7 +70,18 @@ stellantis-public/
 
 ## Installation
 
-**Option A - local add-on folder (no Git needed):**
+**Option A - add-on repository (recommended for versioning):**
+
+1. From Git server (**RECOMMENDED**).
+2. In Home Assistant: **Settings > Apps > App Store > Repositories** and add the
+   repository URL (e.g. `https://github.com/35develr/stellantis-evcc-homeassistant-psa-token-refresh`).
+3. "Check for updates", then install **Stellantis/PSA Token Refresh for evcc** from the store.
+
+If the Supervisor does not show the add-on (it does not appear in the list), the
+reason is in the Supervisor log - usually a typo or an indentation error in
+`config.yaml`.
+
+**Option B - local add-on folder (no Git needed):**
 
 1. Go to the Supervisor data folder. On **Home Assistant Supervised** (Debian +
    Docker, the default layout) it is `/usr/share/hassio/addons`; the real path is
@@ -82,33 +93,6 @@ stellantis-public/
    the entry **Stellantis/PSA Token Refresh for evcc** appears.
 4. Install it (the image is built on the HA machine; this takes a few minutes).
 
-**Option B - add-on repository (recommended for versioning):**
-
-1. Host this repository on a Git server (see below).
-2. In Home Assistant: **Settings > Apps > App Store > Repositories** and add the
-   repository URL (e.g. `https://github.com/yourname/stellantis-evcc-homeassistant-psa-token-refresh`).
-3. "Check for updates", then install **Stellantis/PSA Token Refresh for evcc** from the store.
-
-If the Supervisor does not show the add-on (it does not appear in the list), the
-reason is in the Supervisor log - usually a typo or an indentation error in
-`config.yaml`.
-
-### Hosting the add-on repository
-
-The add-on store accepts repositories as a Git URL, so **GitHub, GitLab and
-self-hosted Git servers all work**; the Supervisor must be able to reach the URL
-from the Home Assistant host (so it must not be `localhost`, use the LAN address
-of the machine).
-
-To publish updates:
-
-1. Push your changes to the repository.
-2. Bump `version` in `psa-token-refresh/config.yaml` - changes are rolled out
-   through this `version` field; without a bump the Supervisor never offers an
-   update.
-3. In Home Assistant, go to **Settings > Apps > App Store > Repositories**, add
-   the repository URL and choose "Check for updates"; then press **Update** on the
-   add-on page (only "Check for updates" lists the update, it does not install it).
 
 ## Configuration
 
