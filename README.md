@@ -32,7 +32,7 @@ really works afterwards.
 | ----------- | --- |
 | Home Assistant OS / Supervised with Supervisor | add-ons and the stop/start API only exist there |
 | **amd64** (x86_64) | PyQt5/PyQtWebEngine exist on PyPI only for x86_64 - the image cannot be built on a Raspberry Pi |
-| evcc as an **add-on** | the package stops/starts exactly this add-on |
+| evcc as an **add-on** | default path: the package stops/starts exactly this add-on. Since 1.5.0 an evcc **without** the add-on works too (`evcc_control: api` / `webhook`, see below) |
 | PSA account **without two-factor login** | the automatic login cannot do 2FA |
 | about 700 MB free disk | Python + QtWebEngine + Xvfb |
 
@@ -115,6 +115,9 @@ evcc_admin_password: "…"   # evcc admin password; the API key is derived from 
 evcc_apikey_auto: true     # create the key automatically and store it in /data/evcc_apikey
 evcc_set_admin_password: false  # true = create a missing evcc admin password
 evcc_slug: "auto"          # auto = slug is looked up automatically (must not be empty)
+# how evcc is controlled: auto | supervisor | api | webhook | none (see below)
+evcc_control: auto
+evcc_restart_webhook: ""    # only for webhook: URL that restarts evcc
 check_interval_minutes: 60
 proactive_refresh_days: 30
 trigger_token: "…"         # long random value, enables the HTTP interface
@@ -138,6 +141,8 @@ The most important options:
 | `evcc_set_admin_password` | `true` = create a missing evcc admin password from `evcc_admin_password` |
 | `evcc_slug` | internal slug of the evcc add-on; `auto` (default) = looked up automatically, the field must not be empty |
 | `evcc_config_path` | path to `evcc.yaml` or `auto` (YAML mode) |
+| `evcc_control` | how evcc is stopped/restarted: `auto` (default) \| `supervisor` \| `api` \| `webhook` \| `none` |
+| `evcc_restart_webhook` | only for `evcc_control: webhook`: URL that restarts evcc |
 | `api_verify_with_test` | have evcc test the new tokens first, then save |
 | `check_interval_minutes` | check interval, default 60 |
 | `proactive_refresh_days` | renew preventively after X days, `0` = off |
@@ -179,6 +184,34 @@ Worth knowing:
 - Wrong password -> clear message `evcc rejected the admin password (HTTP 401)`.
 - Alternatively you can still create the key yourself in evcc and enter it as
   `evcc_apikey`; then nothing automatic happens.
+
+## evcc without the add-on (Docker, systemd, ...)
+
+The default is `evcc_control: auto`: if the Supervisor knows an evcc add-on, that add-on is
+stopped and started again as before. If it does not, **nothing is stopped** - the add-on
+only writes, so that a foreign evcc never goes down unexpectedly.
+
+For an external evcc:
+
+```yaml
+evcc_url: "http://192.168.1.20:7070"   # not 127.0.0.1
+evcc_apikey: "…"                       # or evcc_admin_password
+evcc_control: api                      # shutdown via the API + process manager/watchdog
+mode: api                              # vehicles configured in the evcc database
+```
+
+With `api` the flow is: `POST /api/system/shutdown` -> fetch tokens -> wait until
+`GET /api/state` answers 200 again -> write the configuration -> restart once more if evcc
+requires it. evcc cannot restart itself: that has to be `restart: always` (Docker),
+`Restart=always` (systemd), NSSM recovery or the Home Assistant add-on watchdog. If evcc
+does not come back, the add-on aborts with a clear message and writes nothing.
+
+`evcc_control: webhook` does the same and additionally triggers the restart with
+`POST <evcc_restart_webhook>` (Portainer webhook, HA `rest_command`). Deliberately a URL
+and not a shell command.
+
+`evcc_control: none` never touches evcc (restart manually). YAML mode (`evcc.yaml`) still
+requires an evcc add-on and aborts with a clear message otherwise.
 
 ## How it works
 
@@ -310,6 +343,10 @@ The tests need neither network nor Docker: they exercise the YAML patcher, the
 structure of the evcc API calls and the complete flow against a local fake evcc
 plus a stub token helper. All test files must pass.
 
+`tests/test_evcc_control.py` covers the `evcc_control` modes: the Supervisor path
+(regression), `api` with a watchdog restart, `api` without a restart policy (clear
+failure), `auto` without an evcc add-on, `webhook` and `none`.
+
 ## Troubleshooting / Documentation
 
 Full documentation lives in **[`psa-token-refresh/DOCS.md`](psa-token-refresh/DOCS.md)**.
@@ -320,7 +357,10 @@ Full documentation lives in **[`psa-token-refresh/DOCS.md`](psa-token-refresh/DO
 | `token helper failed … 'timeout'` | since 09/2026 mostly the **new ForgeRock/Gigya login chain** (see below) - the old helper missed the JS redirect. Since 1.4.0 a helper of its own, polling, is used; otherwise raise `helper_deadline` |
 | `no vehicles configured via UI/DB found` | vehicles are in `evcc.yaml` after all -> set `mode: yaml` |
 | `vehicle 'x' not found via UI/DB` | adjust the names (the error message lists all existing vehicles with their titles) |
-| `evcc could not be stopped` | check `hassio_api` / `hassio_role: manager`, verify `evcc_slug` |
+| `evcc could not be stopped` | check `hassio_api` / `hassio_role: manager`, verify `evcc_slug` - or, if evcc is not an add-on, set `evcc_control: api` / `webhook` |
+| `no evcc add-on found` / `evcc is NOT stopped` | evcc does not run as an add-on: set `evcc_control: api` (process manager/watchdog) or `webhook` |
+| `evcc did not come back up` | no restart policy: set `restart: always` / `Restart=always` or enable the add-on watchdog; otherwise use `evcc_control: none` |
+| `YAML mode requires a Supervisor` | `evcc.yaml` is only read by an evcc add-on - import the vehicles into evcc and use `mode: api` |
 | `App a1b2c3d4-evcc does not exist` | the slug was wrong - since 1.3.0 the add-on looks it up itself (`GET /addons`). Manually: enter the name from the log line "Supervisor knows N add-on(s): …" as `evcc_slug` |
 | `Missing required option 'evcc_slug'` while saving | the field was empty - an empty value in `options` is a mandatory option for the Supervisor. Since 1.4.12 it ships as `auto` (the slug is looked up) |
 | `notification failed (401)` | the add-on is missing `homeassistant_api: true` (included in `config.yaml` since 1.3.0) |

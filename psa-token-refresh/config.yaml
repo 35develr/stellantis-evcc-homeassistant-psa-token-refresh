@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.4.12"
+version: "1.5.0"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -51,7 +51,18 @@ options:
   # option MANDATORY for the Supervisor - saving the form then fails with
   # "Missing required option 'evcc_slug'" (report of 2026-10-13).
   evcc_slug: auto
-  evcc_config_path: auto
+  # How evcc is stopped and restarted:
+  #   auto       = supervisor if the Supervisor knows an evcc add-on - otherwise none
+  #   supervisor = via the Supervisor API (evcc runs as an add-on)
+  #   api        = POST /api/system/shutdown; the restart is done by a process manager
+  #                (docker 'restart: always', systemd 'Restart=always', NSSM) or by the
+  #                Home Assistant add-on watchdog
+  #   webhook    = like api, plus POST to the URL below to trigger the restart
+  #   none       = evcc is never touched (write only, restart manually)
+  evcc_control: auto
+  # only for evcc_control: webhook - URL that restarts evcc
+  # (Portainer webhook, HA rest_command, ...); empty = off
+  evcc_restart_webhook: ""
   api_verify_with_test: true
   api_payload_nested: false
   # --- Scheduling ------------------------------------------------------------
@@ -91,7 +102,8 @@ schema:
   evcc_apikey_auto: bool
   evcc_set_admin_password: bool
   evcc_slug: str?
-  evcc_config_path: str
+  evcc_control: list(auto|supervisor|api|webhook|none)
+  evcc_restart_webhook: str?
   api_verify_with_test: bool
   api_payload_nested: bool
   check_interval_minutes: int(5,1440)

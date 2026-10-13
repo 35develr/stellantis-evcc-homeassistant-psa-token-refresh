@@ -6,8 +6,9 @@ cd "$(dirname "$0")/.."
 
 fail=0
 for t in tests/test_config_yaml.py tests/test_patch_evcc_yaml.py \
-         tests/test_evcc_api.py tests/test_orchestrator_api.py tests/test_supervisor_api.py \
-         tests/test_psa_browser_token.py tests/test_api_mode_evcc_stop.py tests/test_backoff.py; do
+         tests/test_evcc_api.py tests/test_evcc_control.py tests/test_orchestrator_api.py \
+         tests/test_supervisor_api.py tests/test_psa_browser_token.py \
+         tests/test_api_mode_evcc_stop.py tests/test_backoff.py; do
     echo "=============================================================="
     echo "== $t"
     echo "=============================================================="

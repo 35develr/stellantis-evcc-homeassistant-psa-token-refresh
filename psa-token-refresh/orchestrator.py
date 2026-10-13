@@ -46,7 +46,7 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION = "1.4.11"
+VERSION = "1.5.0"
 ERROR_PATTERNS = re.compile(
     r"token expired|invalid_grant|invalid_token|cannot create vehicle type 'template'"
     r"|authentication failed|401 Unauthorized"
@@ -90,6 +90,8 @@ def load_options() -> dict:
         "evcc_set_admin_password": False,
         "evcc_slug": "evcc",
         "evcc_config_path": "auto",
+        "evcc_control": "auto",
+        "evcc_restart_webhook": "",
         "api_verify_with_test": True,
         "api_payload_nested": False,
         "check_interval_minutes": 60,
@@ -266,13 +268,14 @@ class Supervisor:
             self._slug = slug
             return slug
 
-        if configured and configured != "auto":
-            self._slug = configured
-            return configured
+        # A configured slug the Supervisor does not know (the list above is complete):
+        # do not guess. Otherwise 'auto' sees an evcc add-on that does not exist and an
+        # evcc running outside Home Assistant is never detected.
 
         hint = ", ".join(f"{a.get('name', '?')}={a.get('slug', '?')}" for a in apps) or "none"
         raise RuntimeError(
-            "evcc add-on not found. Installed add-ons per Supervisor: "
+            "evcc add-on not found (or the configured 'evcc_slug' is not installed). "
+            "Installed add-ons per Supervisor: "
             f"{hint}. Please set the correct slug as 'evcc_slug' in the options."
         )
 
@@ -430,6 +433,138 @@ class Supervisor:
                 hint = (" - for this the add-on needs 'homeassistant_api: true' in its "
                         "config.yaml; alternatively set 'notify: false'")
             log(f"WARNING: notification failed ({status}: {text[:160]}){hint}")
+
+
+class EvccControl:
+    """Stops and starts evcc - depending on the operating mode (`evcc_control`).
+
+    supervisor: via the Supervisor API; evcc runs as an add-on (previous behaviour).
+    api:        POST /api/system/shutdown; the restart is done by a process manager
+                (docker 'restart: always', systemd 'Restart=always', NSSM) or by the
+                Home Assistant add-on watchdog. Afterwards the add-on waits for
+                GET /api/state to answer again.
+    webhook:    like api, plus POST to `evcc_restart_webhook` to trigger the restart
+                (Portainer webhook, HA rest_command, ...). Deliberately a URL and not a
+                shell command - the add-on never executes arbitrary commands.
+    none:       evcc is never touched; the add-on only writes.
+
+    `auto` (default) picks supervisor when the Supervisor knows an evcc add-on - otherwise
+    none. A foreign evcc is never shut down on its own.
+    """
+
+    MODES = ("auto", "supervisor", "api", "webhook", "none")
+
+    def __init__(self, opts: dict, supervisor: Supervisor):
+        self.opts = opts
+        self.sup = supervisor
+        self._mode: str | None = None
+
+    # --- resolution
+
+    def configured(self) -> str:
+        mode = str(self.opts.get("evcc_control") or "auto").strip().lower()
+        if mode not in self.MODES:
+            log(f"WARNING: evcc_control '{mode}' is unknown - using 'auto'")
+            return "auto"
+        return mode
+
+    def webhook(self) -> str:
+        return str(self.opts.get("evcc_restart_webhook") or "").strip()
+
+    def forget(self) -> None:
+        """Drop the resolved mode (after the options changed)."""
+        self._mode = None
+
+    def resolve(self) -> str:
+        """Operating mode for this run (evaluates 'auto', remembers the result)."""
+        if self._mode:
+            return self._mode
+        mode = self.configured()
+        if mode == "auto":
+            mode = "none"
+            if self.sup.available:
+                try:
+                    self.sup.resolve_slug()
+                    mode = "supervisor"
+                except Exception as exc:  # noqa: BLE001
+                    log(f"no evcc add-on found ({exc})")
+                    log("evcc is NOT stopped (evcc_control: auto). For an evcc that runs "
+                        "outside Home Assistant set 'evcc_control: api' (process manager/"
+                        "watchdog) or 'webhook'.")
+            else:
+                log("no Supervisor access - evcc is not stopped (evcc_control: auto)")
+        self._mode = mode
+        return mode
+
+    def available(self) -> bool:
+        return self.resolve() != "none"
+
+    # --- actions
+
+    def stop(self, api: "EvccApi | None" = None) -> bool:
+        mode = self.resolve()
+        if mode == "supervisor":
+            return self.sup.stop_evcc()
+        if mode in ("api", "webhook"):
+            if api is None:
+                log("ERROR: no evcc API client - evcc cannot be stopped")
+                return False
+            ok, info = api.shutdown()
+            if ok:
+                log(f"evcc shut down ({info}) - the restart is done by "
+                    + ("the webhook" if mode == "webhook" else "the process manager/watchdog"))
+            else:
+                log(f"ERROR: evcc could not be shut down: {info}")
+            return ok
+        log("evcc is NOT stopped (evcc_control: none) - the refresh token is used by two "
+            "consumers during the login window")
+        return False
+
+    def start(self, api: "EvccApi | None" = None) -> bool:
+        """Starts evcc again, or waits until it answers again."""
+        mode = self.resolve()
+        if mode == "supervisor":
+            return self.sup.start_evcc()
+        if mode == "none":
+            log("evcc is not restarted (evcc_control: none) - please do it manually, "
+                "otherwise the changed configuration stays inactive")
+            return False
+        if api is None:
+            log("ERROR: no evcc API client - evcc cannot be started")
+            return False
+        if mode == "webhook":
+            url = self.webhook()
+            if not url:
+                log("ERROR: evcc_control is 'webhook', but evcc_restart_webhook is empty")
+                return False
+            status, text = http_request(url, method="POST", timeout=30)
+            if status not in (200, 201, 202, 204):
+                log(f"ERROR: restart webhook {url} -> HTTP {status}: {text[:160]}")
+                return False
+            log(f"restart triggered via webhook ({url} -> HTTP {status})")
+        bereit, meldung = api.wait_until_ready(
+            timeout=int(self.opts.get("evcc_ready_timeout", 150)))
+        log(meldung)
+        if not bereit:
+            log("ERROR: evcc did not come back up - is a process manager with a restart "
+                "policy running, or is the add-on watchdog enabled?")
+        return bereit
+
+    def restart(self, api: "EvccApi | None" = None) -> bool:
+        if not self.stop(api):
+            return False
+        return self.start(api)
+
+    def describe(self) -> str:
+        mode = self.resolve()
+        if mode == "supervisor":
+            return ("supervisor (evcc add-on '"
+                    f"{self.sup._slug or self.opts.get('evcc_slug') or '?'}')")
+        if mode == "webhook":
+            return f"webhook ({self.webhook() or 'URL missing'})"
+        if mode == "api":
+            return "api (shutdown + process manager/watchdog)"
+        return "none (evcc is not touched)"
 
 
 # ------------------------------------------------------------------ environment
@@ -622,6 +757,7 @@ class Refresher:
     def __init__(self, opts: dict, supervisor: Supervisor):
         self.opts = opts
         self.sup = supervisor
+        self.control = EvccControl(opts, supervisor)
         self.lock = threading.Lock()
         self.last_mode: str | None = None
         self._api: EvccApi | None = None
@@ -636,6 +772,8 @@ class Refresher:
         """Re-read options - changes take effect without an add-on restart."""
         self.opts = load_options()
         self.sup.opts = self.opts
+        self.control.opts = self.opts
+        self.control.forget()
         self._api = None
         return self.opts
 
@@ -707,9 +845,9 @@ class Refresher:
             # Safety net: no matter how the run ends - evcc must not be left
             # stopped. Previously the add-on stayed dead after an error in the
             # write path, and charge control was then out of action.
-            if self._evcc_stopped and self.sup.available:
+            if self._evcc_stopped and self.control.available():
                 log("safety net: restarting evcc")
-                if not self.sup.start_evcc():
+                if not self.control.start(self._api):
                     self.sup.notify(
                         "PSA token refresh: evcc is down",
                         "The run aborted and evcc could not be restarted. "
@@ -739,10 +877,14 @@ class Refresher:
             log("dry run: evcc is not stopped (nothing happens to the running system)")
         elif not force_stop:
             log("force_stop=False - evcc is not stopped/started (test run)")
-        elif not self.sup.available:
-            log("WARNING: no Supervisor access - evcc cannot be stopped")
+        elif not self.control.available():
+            log(f"WARNING: evcc is not stopped (evcc_control: {self.control.resolve()}) - "
+                "the refresh token is used by two consumers during the login window. For an "
+                "external evcc set 'evcc_control: api' (process manager/watchdog) or "
+                "'webhook'")
         else:
-            if not self.sup.stop_evcc():
+            log(f"evcc control: {self.control.describe()}")
+            if not self.control.stop(api):
                 raise RuntimeError("evcc could not be stopped - aborting, nothing changed")
             self._evcc_stopped = True
 
@@ -754,7 +896,7 @@ class Refresher:
         # while evcc was still stopped -> every call failed with
         # "Connection refused" and evcc stayed dead.
         if self._evcc_stopped:
-            if not self.sup.start_evcc():
+            if not self.control.start(api):
                 raise RuntimeError(
                     "evcc does not come back up after fetching the tokens - the new "
                     "tokens could not be written"
@@ -819,19 +961,19 @@ class Refresher:
 
         dirty = api.config_dirty()
         restart_done = False
-        if dirty and self.sup.available:
+        if dirty and self.control.available():
             # evcc is running again now - a second start would be a no-op.
             # A configuration marked as dirty only becomes
             # effective after a real restart.
-            if not self.sup.restart_evcc():
+            if not self.control.restart(api):
                 self.sup.notify(
                     "PSA token refresh: evcc does not start",
                     "Tokens were stored, but evcc does not report itself as started.",
                 )
             restart_done = True
         elif dirty:
-            log("WARNING: evcc requires a restart, but Supervisor access is missing "
-                "- please restart the evcc add-on manually")
+            log(f"WARNING: evcc requires a restart, but evcc is not controlled "
+                f"(evcc_control: {self.control.resolve()}) - please restart evcc manually")
         else:
             log("evcc does not require a restart - vehicle was updated at runtime")
 
@@ -882,6 +1024,16 @@ class Refresher:
 
     def _run_yaml(self, state: dict, reason: str, force_stop: bool) -> bool:
         opts = self.opts
+        control = self.control.resolve()
+        if control != "supervisor" and not opts.get("dry_run"):
+            # evcc.yaml only takes effect after a restart of the add-on; without a
+            # Supervisor the add-on cannot restart it (an external evcc does not read the
+            # file at all). Better to abort clearly than to patch a file nobody loads.
+            raise RuntimeError(
+                f"YAML mode requires a Supervisor (evcc as an add-on): evcc_control is "
+                f"'{control}'. For an evcc running outside Home Assistant please import "
+                "the vehicles into evcc and use 'mode: api'."
+            )
         cfg_path = find_evcc_config(opts)
         if not (os.access(cfg_path, os.W_OK) and os.access(os.path.dirname(cfg_path), os.W_OK)):
             raise RuntimeError(
@@ -1070,6 +1222,9 @@ class Refresher:
             "evcc_addon_state": self.sup.state() if self.sup.available else "no Supervisor access",
             "addon_info": self.sup.self_info() if self.sup.available else {},
             "addon_diagnostics": self.sup.self_diagnostics(VERSION) if self.sup.available else [],
+            "evcc_control_configured": opts.get("evcc_control"),
+            "evcc_control_resolved": self.control.describe(),
+            "evcc_restart_webhook": "set" if self.control.webhook() else "empty",
             "evcc_slug_configured": opts.get("evcc_slug"),
             "evcc_slug_resolved": (self.sup._slug or self.sup.resolve_slug())
                                   if self.sup.available else None,

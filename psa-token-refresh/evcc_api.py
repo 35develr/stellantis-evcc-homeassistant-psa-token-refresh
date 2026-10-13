@@ -173,6 +173,29 @@ class EvccApi:
     def state(self) -> dict:
         return self._json("GET", "/api/state") or {}
 
+    # ------------------------------------------------------------ control
+
+    def shutdown(self, timeout: int = 20) -> tuple[bool, str]:
+        """Shut evcc down: POST /api/system/shutdown.
+
+        evcc cannot restart itself - that is up to a process manager (docker
+        'restart: always', systemd 'Restart=always', NSSM) or the add-on watchdog.
+        The call needs the same authentication as GET /api/system/log (API key or
+        session): evcc registers the /api/system subrouter with EnsureAuthHandler
+        (server/http.go).
+
+        CAUTION: never probe this path with OPTIONS. For non-GET routes evcc also
+        registers OPTIONS and calls the same handler - an OPTIONS request shuts evcc
+        down as well (only a real CORS preflight is intercepted). To check reachability
+        and access, use GET /api/system/log.
+        """
+        status, text = self.request("POST", "/api/system/shutdown", timeout=timeout)
+        if status in (200, 202, 204):
+            return True, f"HTTP {status}"
+        hint = " (API key missing/invalid?)" if status in (401, 403) else ""
+        return False, (f"POST /api/system/shutdown -> HTTP {status}: "
+                       f"{text.strip()[:200]}{hint}")
+
     # ------------------------------------------------------------ Admin/API-Key
 
     def auth_state(self) -> str:

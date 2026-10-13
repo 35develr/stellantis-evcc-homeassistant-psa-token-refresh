@@ -1,3 +1,33 @@
+# 1.5.0 (2026-10-13)
+
+- **evcc no longer has to be an add-on (issue #2).** New option `evcc_control`:
+  `auto` (default) | `supervisor` | `api` | `webhook` | `none`.
+  - `supervisor` - previous behaviour: stop/start via the Supervisor API. That path is
+    unchanged, and a regression test keeps exercising it.
+  - `api` - `POST /api/system/shutdown` (API key or session, same auth as
+    `GET /api/system/log`), then the add-on waits for `GET /api/state` to answer again.
+    The restart is done by a process manager (`docker restart: always`, systemd
+    `Restart=always`, NSSM) or by the **Home Assistant add-on watchdog**. That is what
+    makes an evcc running outside Home Assistant possible.
+  - `webhook` - like `api`, plus `POST <evcc_restart_webhook>` to trigger the restart
+    (Portainer webhook, HA `rest_command`, ...). Deliberately a URL and not a shell
+    command: the add-on never executes arbitrary commands.
+  - `none` - evcc is never touched; the add-on only writes (the log points out that the
+    refresh token then has two consumers during the login window).
+  - `auto` picks `supervisor` when the Supervisor knows an evcc add-on - otherwise it does
+    **not** stop anything. A foreign evcc is never shut down on its own.
+- YAML mode (`evcc.yaml`) still requires a Supervisor and aborts with a clear message
+  otherwise, instead of patching a file nobody reloads (dry runs excepted - they only
+  write a preview).
+- Diagnostics: `/status` and `/dump` now report `evcc_control_configured`,
+  `evcc_control_resolved` and whether the restart URL is set.
+- Documented trap: never probe `POST /api/system/shutdown` with `OPTIONS`. For non-GET
+  routes evcc registers OPTIONS with the same handler (`server/http.go`), so an OPTIONS
+  request shuts evcc down as well. Use `GET /api/system/log` to check access.
+- New self-test `tests/test_evcc_control.py`: Supervisor path (regression), `api` with a
+  watchdog restart, `api` without a restart policy (clear failure), `auto` without an
+  evcc add-on (writes without stopping), `webhook` and `none`.
+
 # 1.4.12 (2026-10-13)
 
 - **Bugfix: the configuration form can be saved again without inventing an `evcc_slug`.**

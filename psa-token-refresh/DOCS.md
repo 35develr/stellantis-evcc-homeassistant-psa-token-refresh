@@ -119,6 +119,8 @@ answers on its port again. During this time Home Assistant answers there itself 
 | `evcc_user` | only for the log/diagnosis |
 | `evcc_slug` | internal slug of the evcc add-on; `auto` (default, the field must not be empty) = looked up automatically |
 | `evcc_config_path` | path to `evcc.yaml` or `auto` (YAML mode) |
+| `evcc_control` | how evcc is stopped and restarted: `auto` (default) \| `supervisor` \| `api` \| `webhook` \| `none` |
+| `evcc_restart_webhook` | only for `evcc_control: webhook`: URL that restarts evcc (empty = off) |
 | `api_verify_with_test` | have evcc test the new tokens first, then save |
 | `api_payload_nested` | only needed if evcc expects the PUT body nested |
 | `check_interval_minutes` | check interval, default 60 |
@@ -279,6 +281,44 @@ The response contains `deutung` (which step it is stuck in), `url_verlauf` and
 without sending credentials through the session. If it stays stuck on the login page,
 a higher `helper_deadline` helps; if no page appears at all, PSA is probably blocking the
 headless browser (then only manual token creation with `evcc token` remains).
+
+## evcc is not an add-on
+
+The default is `supervisor`: the add-on stops the evcc add-on, fetches the tokens while it
+is down (the refresh token is single-use - two consumers at the same time kill it) and
+starts it again afterwards. That path is unchanged and is still covered by the self-tests.
+
+For an evcc that does **not** run as an add-on (Docker, systemd, Windows service) there is
+the option `evcc_control`:
+
+| Value | What happens |
+| --- | --- |
+| `auto` | `supervisor` if the Supervisor knows an evcc add-on - otherwise **nothing is stopped** (the add-on only writes). A foreign evcc is never shut down on its own. |
+| `supervisor` | Stop/start via the Supervisor API (as before). |
+| `api` | `POST /api/system/shutdown`, then the add-on waits for `GET /api/state` to answer again. The restart is done by a process manager (`docker restart: always`, systemd `Restart=always`, NSSM) or by the **Home Assistant add-on watchdog**. |
+| `webhook` | Like `api`, plus `POST <evcc_restart_webhook>` (Portainer webhook, HA `rest_command`, ...) to trigger the restart. |
+| `none` | evcc is never touched; restarting stays manual. Note that the refresh token then has two consumers during the login window, and a configuration marked *dirty* stays inactive. |
+
+Prerequisites for `api`/`webhook`:
+
+1. `evcc_url` points at the instance (e.g. `http://192.168.1.20:7070`) - the add-on has
+   `host_network: true` and can reach the LAN.
+2. `evcc_apikey` or `evcc_admin_password` is set: the shutdown endpoint needs the same
+   authentication as `GET /api/system/log` (API key or session).
+3. A **restart policy** exists (`restart: always`, `Restart=always`, NSSM recovery) or the
+   add-on watchdog is enabled (Settings > Apps > evcc > Watchdog). Without it evcc stays
+   down after the shutdown; the add-on then aborts with a clear message and writes nothing
+   (window: `evcc_ready_timeout`).
+4. The vehicles live in the evcc database (`mode: api`). YAML mode needs access to
+   `evcc.yaml` **and** a restart of the add-on, so with an external evcc the add-on aborts
+   with a clear message (except in a dry run, which only writes a preview).
+
+Always do the first real run with `dry_run: true` (which never stops evcc), then go live.
+
+**Do not probe this with `OPTIONS`:** for non-GET routes evcc also registers `OPTIONS` and
+calls the same handler (`server/http.go`), so `OPTIONS /api/system/shutdown` shuts evcc down
+as well - only a real CORS preflight is intercepted. Check access and reachability with
+`GET /api/system/log`.
 
 ## What is a slug?
 
