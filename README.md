@@ -114,7 +114,7 @@ evcc_apikey: ***            # leave empty = key is created automatically
 evcc_admin_password: "…"   # evcc admin password; the API key is derived from it
 evcc_apikey_auto: true     # create the key automatically and store it in /data/evcc_apikey
 evcc_set_admin_password: false  # true = create a missing evcc admin password
-evcc_slug: ""              # empty = slug is looked up automatically
+evcc_slug: "auto"          # auto = slug is looked up automatically (must not be empty)
 check_interval_minutes: 60
 proactive_refresh_days: 30
 trigger_token: "…"         # long random value, enables the HTTP interface
@@ -136,7 +136,7 @@ The most important options:
 | `evcc_admin_password` | evcc admin password; the add-on creates the API key from it |
 | `evcc_apikey_auto` | create the key automatically and store it in `/data/evcc_apikey` |
 | `evcc_set_admin_password` | `true` = create a missing evcc admin password from `evcc_admin_password` |
-| `evcc_slug` | internal slug of the evcc add-on; empty/`auto` = looked up automatically |
+| `evcc_slug` | internal slug of the evcc add-on; `auto` (default) = looked up automatically, the field must not be empty |
 | `evcc_config_path` | path to `evcc.yaml` or `auto` (YAML mode) |
 | `api_verify_with_test` | have evcc test the new tokens first, then save |
 | `check_interval_minutes` | check interval, default 60 |
@@ -322,6 +322,7 @@ Full documentation lives in **[`psa-token-refresh/DOCS.md`](psa-token-refresh/DO
 | `vehicle 'x' not found via UI/DB` | adjust the names (the error message lists all existing vehicles with their titles) |
 | `evcc could not be stopped` | check `hassio_api` / `hassio_role: manager`, verify `evcc_slug` |
 | `App a1b2c3d4-evcc does not exist` | the slug was wrong - since 1.3.0 the add-on looks it up itself (`GET /addons`). Manually: enter the name from the log line "Supervisor knows N add-on(s): …" as `evcc_slug` |
+| `Missing required option 'evcc_slug'` while saving | the field was empty - an empty value in `options` is a mandatory option for the Supervisor. Since 1.4.12 it ships as `auto` (the slug is looked up) |
 | `notification failed (401)` | the add-on is missing `homeassistant_api: true` (included in `config.yaml` since 1.3.0) |
 | `evcc still reports token problems` | check the evcc log; evcc < 0.315.1: see the emergency tool below |
 | `test of the new tokens … failed` | the freshly fetched tokens were not accepted by PSA - usually the login itself is the problem |

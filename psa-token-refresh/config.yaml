@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.4.11"
+version: "1.4.12"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -46,8 +46,11 @@ options:
   evcc_apikey_auto: true
   # true = if evcc has NO admin password yet: create the password above in evcc
   evcc_set_admin_password: false
-  # empty/"auto" = slug is looked up automatically (e.g. "evcc" or "a1b2c3d4-evcc")
-  evcc_slug: 
+  # "auto" = slug is looked up automatically (e.g. "evcc" or "a1b2c3d4-evcc").
+  # Important: this must have a value. An empty value (null) in `options` makes the
+  # option MANDATORY for the Supervisor - saving the form then fails with
+  # "Missing required option 'evcc_slug'" (report of 2026-10-13).
+  evcc_slug: auto
   evcc_config_path: auto
   api_verify_with_test: true
   api_payload_nested: false

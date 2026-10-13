@@ -1,3 +1,21 @@
+# 1.4.12 (2026-10-13)
+
+- **Bugfix: the configuration form can be saved again without inventing an `evcc_slug`.**
+  An option entry with an empty value (`evcc_slug:` with nothing after it) is not "empty"
+  for the Supervisor, it is a **mandatory option**: saving only worked after *something*
+  had been entered, otherwise it answered
+  `Speichern fehlgeschlagen: Missing required option 'evcc_slug' in Stellantis/PSA Token
+  Refresh for evcc (<hash>_psa_token_refresh)`. `evcc_slug` therefore now defaults to
+  **`auto`**, which is exactly what the previously empty field did (the slug is looked up
+  automatically via `GET /addons`). The field ships pre-filled and can be saved right
+  away; the schema entry stays `str?`.
+  The same applies to every other option: an empty value in `options` makes it mandatory,
+  no matter what the schema says.
+- New self-test `tests/test_config_yaml.py` (wired into `scripts/run_tests.sh`) pins this
+  down: no option with an empty value, a schema entry for every option, a default value
+  for `evcc_slug`, and the version in `config.yaml` must match the CHANGELOG (otherwise
+  there is no update in the app store).
+
 # 1.4.11 (2026-10-01)
 
 - **Bugfix: after the evcc restart the add-on now waits for readiness.** With `dry_run: false`

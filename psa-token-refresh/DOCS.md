@@ -117,7 +117,7 @@ answers on its port again. During this time Home Assistant answers there itself 
 | `evcc_apikey_auto` | create the key automatically and store it in `/data/evcc_apikey` |
 | `evcc_set_admin_password` | `true` = create a missing evcc admin password from `evcc_admin_password` |
 | `evcc_user` | only for the log/diagnosis |
-| `evcc_slug` | internal slug of the evcc add-on; empty/`auto` = looked up automatically |
+| `evcc_slug` | internal slug of the evcc add-on; `auto` (default, the field must not be empty) = looked up automatically |
 | `evcc_config_path` | path to `evcc.yaml` or `auto` (YAML mode) |
 | `api_verify_with_test` | have evcc test the new tokens first, then save |
 | `api_payload_nested` | only needed if evcc expects the PUT body nested |
@@ -194,8 +194,8 @@ access (`HTTP 403`), check:
 
 1. `hassio_api: true` (is in the add-on's `config.yaml`),
 2. `hassio_role: manager` - without this role an add-on may not control other add-ons,
-3. `evcc_slug` - exactly the slug of the evcc add-on (default `evcc`; other repos use
-   e.g. `a0d7b954_evcc`).
+3. `evcc_slug` - exactly the slug of the evcc add-on (default `auto` = the add-on
+   looks it up itself; other repos use e.g. `a0d7b954_evcc`).
 
 The add-on states the status code in the log explicitly instead of failing silently.
 The trace is also in the Supervisor log
@@ -296,6 +296,20 @@ automatically if needed. The found list is in the log, and in the diagnosis
 
 If the slug is wrong, evcc is left untouched: the state cannot be determined,
 the add-on aborts and reports that - it does not consider evcc stopped.
+
+**The field must not be empty.** `evcc_slug` is declared optional (`str?`) in the add-on
+definition - but an *empty* value in `options` still makes it a mandatory option for the
+Supervisor. Leaving the field empty while saving produces
+
+```
+Speichern fehlgeschlagen: Missing required option 'evcc_slug' in
+Stellantis/PSA Token Refresh for evcc (<hash>_psa_token_refresh)
+```
+
+and the form cannot be saved at all until something is in there. That is why `1.4.12`
+ships `auto` as the default: same meaning as "empty" (the slug is looked up), but
+saveable. The value itself is not a secret and not a login - it is only the name the
+Supervisor uses to address the evcc add-on.
 
 ## Creating the evcc API key automatically
 
