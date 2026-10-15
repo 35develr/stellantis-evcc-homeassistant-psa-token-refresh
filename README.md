@@ -55,7 +55,7 @@ on two machines.
 With `auto` the engine is a preference, not a requirement: if it delivers **no
 authorization code** (browser crash, blocked page, deadline) the add-on retries once with
 the other engine and says so in the log
-(`playwright delivered no code (exit 3) - retrying with the fallback engine qt`). On amd64
+(`playwright delivered no code (exit 1) - retrying with the fallback engine qt`). On amd64
 that means Playwright first, QtWebEngine second - nothing to set up, and the diagnosis then
 records both attempts (`backend_used`, `fallback_from`). A name engine (`playwright` or
 `qt`) is never replaced, and a login probe never runs twice.
@@ -68,12 +68,12 @@ stellantis-public/
 ├── repository.yaml               <- add-on repository file
 ├── psa-token-refresh/            <- the add-on
 │   ├── config.yaml               add-on definition (options, schema, permissions)
-│   ├── Dockerfile                image (Python + Xvfb + QtWebEngine)
-│   ├── run.sh                    starts Xvfb and the orchestrator
+│   ├── Dockerfile                image (Playwright/Chromium, amd64 also Qt+Xvfb)
+│   ├── run.sh                    starts Xvfb (if present) and the orchestrator
 │   ├── orchestrator.py           flow control (detect, stop, fetch, write, verify)
 │   ├── evcc_api.py               evcc configuration API (vehicles from the DB/UI)
 │   ├── patch_evcc_yaml.py        YAML mode (comments are preserved)
-│   ├── psa-browser-token.py      token helper (login chain, QtWebEngine)
+│   ├── psa-browser-token.py      token helper (login chain, browser engines)
 │   ├── DOCS.md / CHANGELOG.md
 ├── homeassistant/
 │   ├── rest_command.yaml         rest_command + REST sensor
@@ -174,7 +174,7 @@ The most important options:
 | `rotate_user_key` | set the `user` field to a new generation (recommended) |
 | `skip_while_charging` | do not renew while a car is charging |
 | `helper_deadline` | overall deadline of the helper in seconds (default 240) |
-| `browser_backend` | engine that performs the login: `auto` (default; Playwright, otherwise Qt), `playwright` or `qt` (amd64 only) |
+| `browser_backend` | engine that performs the login: `auto` (default; Playwright, otherwise Qt, one fail-over), `playwright` or `qt` (amd64 only) |
 | `trigger_token` | password for the HTTP interface, empty = disabled |
 | `dry_run` | do everything, but do not change evcc (result in the log or as a file in `/data`) |
 | `notify` | create notifications in Home Assistant |
