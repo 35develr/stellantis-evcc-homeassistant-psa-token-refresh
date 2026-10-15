@@ -45,12 +45,18 @@ fast-forward. Never merge `main` into the workbench branch in the other directio
 
 ## CI
 
-`.github/workflows/tests.yml` runs the self-tests (and a syntax check) on every push. It is
-prepared on the branch `ci-workflow` instead of `main`, because GitHub refuses a push that
-creates or updates a workflow file unless the pushing token carries the `workflow` scope
-(`refusing to allow a Personal Access Token to create or update workflow ... without
-'workflow' scope`). Either extend the token scope and merge that branch, or run step 3 by
-hand before releasing.
+`.github/workflows/tests.yml` runs the self-tests and a syntax check on every push and on pull
+requests. It is a signal, not a gate: Home Assistant does not look at CI before offering an
+update, so a red run only means "do not release yet" - step 3 stays the check before a
+release.
+
+Whoever pushes: creating or updating a workflow file needs a token that is allowed to write
+workflows. With a fine-grained token that is the repository permission **Workflows: Read and
+write** - not "Actions", which is a separate row and only covers running/reading runs; with a
+classic token it is the `workflow` scope. Without it GitHub rejects the push with
+`refusing to allow a Personal Access Token to create or update workflow ... without 'workflow'
+scope`, and the API answers `403 Resource not accessible by personal access token`. The web UI
+is not affected.
 
 ## Compatibility rules (an update has to work for existing installations)
 

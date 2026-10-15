@@ -1,0 +1,24 @@
+# Self-tests of the package. They need no dependencies, no network and no Docker: the suite
+# is plain Python, and the browser test skips itself when Playwright is not installed.
+#
+# This is a signal, not a gate: Home Assistant does not look at CI before offering an update,
+# so a red run here means "do not push to the release repository yet".
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  self-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python3 -m compileall -q psa-token-refresh tests
+      - name: Run the self-tests
+        run: bash scripts/run_tests.sh
