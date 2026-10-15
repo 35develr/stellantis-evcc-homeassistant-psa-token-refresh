@@ -52,6 +52,14 @@ in the flow applies to both. The engine in use is written to the log at start-up
 (`browser_backend`), which is the first thing to look at when a login behaves differently
 on two machines.
 
+With `auto` the engine is a preference, not a requirement: if it delivers **no
+authorization code** (browser crash, blocked page, deadline) the add-on retries once with
+the other engine and says so in the log
+(`playwright delivered no code (exit 3) - retrying with the fallback engine qt`). On amd64
+that means Playwright first, QtWebEngine second - nothing to set up, and the diagnosis then
+records both attempts (`backend_used`, `fallback_from`). A name engine (`playwright` or
+`qt`) is never replaced, and a login probe never runs twice.
+
 ## Repository layout
 
 ```

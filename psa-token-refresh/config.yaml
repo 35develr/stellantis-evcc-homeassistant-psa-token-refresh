@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.6.1"
+version: "1.7.0"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -84,7 +84,8 @@ options:
   # helper that performs the PSA login and returns the tokens
   helper_cmd: "python3 /app/psa-browser-token.py"
   # Which browser engine performs the login:
-  #   auto       = playwright if present, otherwise qt (default)
+  #   auto       = playwright if present, otherwise qt; if that engine delivers no
+  #                authorization code, the other one is tried once (default)
   #   playwright = Chromium out of the Playwright package, headless, amd64 AND aarch64
   #   qt         = PyQt5/QtWebEngine, the historical path, only in the amd64 image
   browser_backend: auto

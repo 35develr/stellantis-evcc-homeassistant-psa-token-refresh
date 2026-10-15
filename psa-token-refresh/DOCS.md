@@ -162,6 +162,22 @@ engine is reported in `/status` and in the diagnosis file (`backend_configured` 
 `backend_used`), which makes it possible to tell "same add-on, different machine,
 different result" apart in one look.
 
+**Fail-over.** With `auto`, an engine that delivers no authorization code is replaced once
+by the other one:
+
+```
+[psa] browser backend: playwright (configured: auto)
+[psa] ERROR browser error (Error): Page.goto: net::ERR_CONNECTION_RESET
+[psa] playwright delivered no code (exit 1) - retrying with the fallback engine qt
+[psa] browser backend: qt (configured: auto)
+```
+
+That covers a crashing browser, an unreachable login page and a deadline, and it is the
+reason the amd64 image still carries QtWebEngine. It does **not** override a choice you made
+(`browser_backend: playwright` or `qt` stays as configured), and a probe does not run twice -
+if a probe fails, start it explicitly with the other engine. The diagnosis then names both
+attempts: `backend_used` is the engine that ran last, `fallback_from` the one that gave up.
+
 A note for maintainers, because it cost a day: the authorization code arrives on the
 redirect to the brand scheme (`mymap://oauth2redirect/...`). Chromium refuses that
 navigation (`net::ERR_ABORTED`, `page.url()` stays `about:blank`), and Playwright's

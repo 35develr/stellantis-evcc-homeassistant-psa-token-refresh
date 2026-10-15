@@ -46,7 +46,7 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION_FALLBACK = "1.6.1"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.7.0"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -127,7 +127,8 @@ def load_options() -> dict:
         "helper_deadline": 240,
         # own helper (polling, works with the new ForgeRock/Gigya chain);
         "helper_cmd": "python3 /app/psa-browser-token.py",
-        # browser engine of the helper: auto (playwright, then qt), playwright or qt
+        # browser engine of the helper: auto (playwright, then qt, with one fail-over),
+        # playwright or qt
         "browser_backend": "auto",
         "trigger_port": 8909,
         "trigger_token": "",

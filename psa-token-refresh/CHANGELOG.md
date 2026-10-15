@@ -1,3 +1,27 @@
+# 1.7.0 (2026-10-15)
+
+- **Fail-over between the browser engines.** With `browser_backend: auto` (the default) the
+  add-on no longer stops when the first engine delivers no authorization code: a browser
+  crash, an unreachable login page or a deadline now lead to one retry with the other
+  engine, logged as
+  `playwright delivered no code (exit 1) - retrying with the fallback engine qt`. On amd64
+  that means Playwright first, QtWebEngine second - the safety net for the new default
+  engine, and the reason the amd64 image keeps Qt for now. An explicitly named engine is
+  never replaced, and a login probe does not run twice (start it with the other engine
+  instead).
+- A crashing engine is now a reportable result instead of a traceback: the attempt writes
+  the usual diagnosis file (`browser error (Error): ...`) and the run exits with 1. The
+  diagnosis names both attempts - `backend_used` is the engine that ran last,
+  `fallback_from` the one that gave up first.
+- The diagnosis no longer contains the duplicated `aktionen` key (the action log was
+  written twice).
+- Documentation: README/DOCS describe the fail-over and the log lines, `RELEASING.md` (new)
+  documents the workbench/release split, the version rules and the compatibility rules an
+  update has to keep.
+- Verified in production, not only against the fake chain in the tests: the Playwright
+  engine fetched real tokens from the live PSA/Stellantis login chain on an amd64 Home
+  Assistant (1.6.0), including the redirect to the brand scheme and the token exchange.
+
 # 1.6.1 (2026-10-15)
 
 - **Fixed: the 1.6.0 image reported itself as 1.5.0.** `orchestrator.py` kept the version as

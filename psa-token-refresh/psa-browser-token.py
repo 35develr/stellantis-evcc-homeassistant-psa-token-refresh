@@ -970,8 +970,9 @@ def flow_driver(backend: BrowserBackend, state: dict, args, log) -> int:
         backend.pause(POLL_SECONDS)
 
 
-def run_browser(args) -> int:
-    state = {
+def new_attempt_state(args) -> dict:
+    """State of one browser attempt (identity keys and per-attempt counters)."""
+    return {
         "brand": args.brand,
         "code": None,
         "history": [],
@@ -992,37 +993,90 @@ def run_browser(args) -> int:
         "probe": args.probe,
         "backend_configured": getattr(args, "backend", "auto"),
         "backend_used": None,
+        "fallback_from": None,
         "dump_reason": None,
         "debug_path": os.path.join(os.environ.get("DATA_DIR", "/data"), "psa-login-debug.json"),
     }
-    verifier, challenge = generate_pkce()
-    oauth_state = new_state()
-    state["verifier"] = verifier
-    state["oauth_state"] = oauth_state
-    authorize_url = build_authorize_url(args.brand, args.country, challenge, oauth_state)
 
-    def log(line: str) -> None:
-        state["action_log"].append(line)
 
+def reset_attempt(state: dict) -> None:
+    """Free the state for another engine. The action log stays - it documents both tries."""
+    previous = state.get("backend_used")
+    state.update({
+        "code": None,
+        "history": [],
+        "login_submitted": False,
+        "consent_clicked": False,
+        "consent_clicks": 0,
+        "consent_last_ts": 0.0,
+        "login_urls": [],
+        "login_last_ts": 0.0,
+        "konsent_ergebnis": [],
+        "server_fehler": [],
+        "seiten": {},
+        "snapshot": {},
+        "requests": [],
+        "skipped_codes": [],
+        "started": time.time(),
+        "dump_reason": None,
+        "backend_used": None,
+        "fallback_from": previous,
+    })
+
+
+def sync_state_from(backend, state: dict) -> None:
+    """Take over what the engine saw and close it - also after a crash."""
+    if backend is None:
+        return
+    # the diagnosis has to be complete even if the driver raised
     try:
-        backend = make_backend(getattr(args, "backend", "auto"), oauth_state)
-    except RuntimeError as exc:
-        print(f"[psa] FEHLER {exc}", file=sys.stderr, flush=True)
-        return 1
-    state["backend_used"] = backend.name
+        state["requests"] = backend.requests() or state["requests"]
+        state["skipped_codes"] = backend.skipped_codes() or state["skipped_codes"]
+        if backend.code() and not state["code"]:
+            state["code"] = backend.code()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[psa] note: engine state unreadable ({type(exc).__name__}: {exc})",
+              file=sys.stderr, flush=True)
+    try:
+        backend.close()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[psa] note: closing the engine failed ({type(exc).__name__}: {exc})",
+              file=sys.stderr, flush=True)
 
+
+def run_attempt(args, backend_name: str, oauth_state: str, authorize_url: str,
+                state: dict, log) -> tuple[int, bool]:
+    """One engine, one try: (exit code, was an authorization code captured?).
+
+    A crashing engine is a result, not the end of the run: the first engine of "auto" may
+    still be replaced by the fallback engine in run_browser().
+    """
+    try:
+        backend = make_backend(backend_name, oauth_state)
+    except RuntimeError as exc:
+        # no engine at all (not installed, unusable image) - this is not a browser error
+        print(f"[psa] FEHLER {exc}", file=sys.stderr, flush=True)
+        return 1, False
+
+    state["backend_used"] = backend.name
     print(f"[psa] starting {backend.name} browser for {args.brand} ...", flush=True)
     print(f"[psa] authorize URL: {authorize_url[:120]}...", flush=True)
+    failure = None
     try:
         backend.start(authorize_url)
         flow_driver(backend, state, args, log)
+    except Exception as exc:  # noqa: BLE001
+        # the engine ran and broke: a result, not the end of the run - the other engine
+        # may still work (see run_browser), and the diagnosis has to show this attempt
+        failure = f"browser error ({type(exc).__name__}): {exc}"
     finally:
-        # the diagnosis has to be complete even if the driver raised
-        state["requests"] = backend.requests()
-        state["skipped_codes"] = backend.skipped_codes()
-        if backend.code() and not state["code"]:
-            state["code"] = backend.code()
-        backend.close()
+        sync_state_from(backend, state)
+
+    if failure:
+        log(failure)
+        dump(state, failure)
+        print(f"[psa] ERROR {failure}", file=sys.stderr, flush=True)
+        return 1, False
 
     if state["code"]:
         print("[psa] exchanging code for tokens ...", flush=True)
@@ -1033,13 +1087,48 @@ def run_browser(args) -> int:
             print(f"[psa] ERROR token exchange: {exc} "
                   f"| code length {len(state['code'])}, intermediate steps with foreign "
                   f"code skipped: {len(state['skipped_codes'])}", file=sys.stderr, flush=True)
-            return 1
+            return 1, True
         print(json.dumps(tokens, indent=4))
-        return 0
+        return 0, True
     if state["probe"]:
         # a probe ends with a dump; only a deadline is an error (exit 3, as before)
-        return 3 if state.get("dump_reason") == "timeout" else 0
-    return 3
+        return (3 if state.get("dump_reason") == "timeout" else 0), False
+    return 3, False
+
+
+def run_browser(args) -> int:
+    state = new_attempt_state(args)
+    verifier, challenge = generate_pkce()
+    oauth_state = new_state()
+    state["verifier"] = verifier
+    state["oauth_state"] = oauth_state
+    authorize_url = build_authorize_url(args.brand, args.country, challenge, oauth_state)
+
+    def log(line: str) -> None:
+        state["action_log"].append(line)
+
+    configured = getattr(args, "backend", "auto")
+    try:
+        choice = choose_backend(configured, have_playwright(), have_qt())
+    except RuntimeError as exc:
+        print(f"[psa] FEHLER {exc}", file=sys.stderr, flush=True)
+        return 1
+    state["backend_used"] = choice
+
+    code, delivered = run_attempt(args, choice, oauth_state, authorize_url, state, log)
+
+    # Fail-over: with "auto" the engine is a preference, not a requirement. If it did not
+    # even deliver an authorization code (crash, blocked page, deadline), the other engine
+    # gets one try - that is why the amd64 image still carries QtWebEngine next to
+    # Playwright. Not in probe mode (a probe is a diagnosis - twice the runtime for the
+    # same insight) and never when an engine was named explicitly.
+    if (not delivered and not args.probe and configured == "auto" and choice != "qt"
+            and have_qt()):
+        print(f"[psa] {choice} delivered no code (exit {code}) - retrying with the "
+              f"fallback engine qt", flush=True)
+        reset_attempt(state)
+        code, delivered = run_attempt(args, "qt", oauth_state, authorize_url, state, log)
+    return code
 
 
 def dump(state: dict, reason: str) -> None:
@@ -1049,6 +1138,7 @@ def dump(state: dict, reason: str) -> None:
         "marke": state.get("brand"),
         "backend_configured": state.get("backend_configured"),
         "backend_used": state.get("backend_used"),
+        "fallback_from": state.get("fallback_from"),
         "dauer_s": round(time.time() - state["started"], 1),
         "url_verlauf": state["history"][-12:],
         "request_verlauf": state["requests"][-25:],
@@ -1063,7 +1153,6 @@ def dump(state: dict, reason: str) -> None:
         "kaestchen_ergebnis": state["konsent_ergebnis"][-6:],
         "server_fehler": state["server_fehler"][:4],
         "letzter_zustand": state["snapshot"],
-        "aktionen": state["action_log"][-12:],
         "deutung": health_hint(state["snapshot"]),
     }
     try:
