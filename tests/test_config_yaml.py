@@ -146,6 +146,33 @@ def test_version_matches_changelog():
           f"config.yaml version={version}, CHANGELOG starts with {match.group(1)}")
 
 
+def test_running_image_reports_the_config_version():
+    """The version inside the image decides the self-diagnosis, so it must not drift.
+
+    A stale constant in orchestrator.py once made the freshly built 1.6.0 image announce
+    itself as 1.5.0 - the log then claims "the running image does not match the state of
+    the installation", which looks like a broken update.
+    """
+    top, _ = get_config()
+    version = top["version"].strip().strip('"')
+    source = "\n".join(_read(os.path.join(ADDON_DIR, "orchestrator.py")))
+    check(re.search(r'^VERSION = "\d+\.\d+\.\d+"', source, re.MULTILINE) is None,
+          "orchestrator.py must not hardcode VERSION - the image provides /app/VERSION")
+    fallback = re.search(r'^VERSION_FALLBACK = "([\d.]+)"', source, re.MULTILINE)
+    check(fallback is not None, "orchestrator.py has no VERSION_FALLBACK constant")
+    check(fallback.group(1) == version,
+          f"VERSION_FALLBACK={fallback.group(1)} but config.yaml says {version}")
+    check("VERSION = _read_version()" in source,
+          "orchestrator.py must read the version from /app/VERSION")
+    check('with_name' not in source, "keep using os.path - the source imports no pathlib")
+    dockerfile = "\n".join(_read(os.path.join(ADDON_DIR, "Dockerfile")))
+    check(re.search(r'> /app/VERSION', dockerfile),
+          "the Dockerfile must write BUILD_VERSION into /app/VERSION")
+    arg = re.search(r'^ARG BUILD_VERSION="([\d.]+)"$', dockerfile, re.MULTILINE)
+    check(arg is not None and arg.group(1) == version,
+          f"Dockerfile ARG BUILD_VERSION={arg and arg.group(1)} vs config.yaml {version}")
+
+
 def test_slug_and_arch():
     top, _ = get_config()
     check(top["slug"].strip().strip('"') == "psa_token_refresh",

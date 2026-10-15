@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="1.6.0"
+ARG BUILD_VERSION="1.6.1"
 ARG BUILD_ARCH="amd64"
 
 FROM python:3.12-bookworm
@@ -51,5 +51,11 @@ WORKDIR /app
 COPY psa-browser-token.py evcc_api.py patch_evcc_yaml.py \
      orchestrator.py run.sh /app/
 RUN chmod a+x /app/run.sh
+
+# The version has to live in the image: orchestrator.py compares its own version with the
+# one the Supervisor reports for the installed app and warns when the two differ (that is
+# what catches hand-edited files or a half-finished update). ARG BUILD_VERSION is passed by
+# the Supervisor for every build (supervisor/apps/build.py).
+RUN printf '%s\n' "${BUILD_VERSION}" > /app/VERSION
 
 ENTRYPOINT ["/app/run.sh"]

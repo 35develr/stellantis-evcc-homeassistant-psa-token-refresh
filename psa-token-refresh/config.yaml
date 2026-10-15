@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.6.0"
+version: "1.6.1"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)

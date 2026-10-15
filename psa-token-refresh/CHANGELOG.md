@@ -1,3 +1,15 @@
+# 1.6.1 (2026-10-15)
+
+- **Fixed: the 1.6.0 image reported itself as 1.5.0.** `orchestrator.py` kept the version as
+  a hardcoded constant that was not raised when 1.6.0 was built, which made every start log
+  `WARNING: image reports version 1.5.0, the Supervisor knows 1.6.0 - the running image does
+  not match the state of the installation (incomplete update or files replaced by hand)`.
+  The version now comes from the image (`/app/VERSION`, written by the Dockerfile from the
+  Supervisor's `BUILD_VERSION`), the constant is only a fallback for a straight checkout,
+  and `tests/test_config_yaml.py` keeps fallback, `config.yaml` and the CHANGELOG equal.
+  Nothing was wrong with the 1.6.0 image - the warning was a false alarm caused by the
+  version string, not by the build.
+
 # 1.6.0 (2026-10-15)
 
 - **The add-on now also runs on aarch64 (issue #3 - "Install button stays grey").** The

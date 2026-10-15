@@ -46,7 +46,29 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION = "1.5.0"
+VERSION_FALLBACK = "1.6.1"        # only used when the image carries no VERSION file
+
+
+def _read_version() -> str:
+    """Return the version of the running image.
+
+    The image gets the version the Supervisor built it with written into /app/VERSION
+    (Dockerfile, build arg BUILD_VERSION). Without that file - i.e. when this script is
+    run straight from a checkout - the fallback constant is used, and
+    tests/test_config_yaml.py keeps that constant and config.yaml in step: a stale
+    constant once made a 1.6.0 image report itself as 1.5.0 ("the running image does not
+    match the state of the installation").
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            found = handle.read().strip()
+    except OSError:
+        return VERSION_FALLBACK
+    return found or VERSION_FALLBACK
+
+
+VERSION = _read_version()
 ERROR_PATTERNS = re.compile(
     r"token expired|invalid_grant|invalid_token|cannot create vehicle type 'template'"
     r"|authentication failed|401 Unauthorized"
