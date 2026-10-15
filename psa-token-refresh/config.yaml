@@ -1,13 +1,16 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.5.0"
+version: "1.6.0"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
   when evcc reports that they have expired - for vehicles configured in the
   evcc UI (configuration API) and for vehicles from evcc.yaml.
-url: "https://github.com/yourname/stellantis-evcc-homeassistant-psa-token-refresh"
+url: "https://github.com/35develr/stellantis-evcc-homeassistant-psa-token-refresh"
+# amd64 = qt backend available as a fallback, aarch64 = Playwright backend only.
+# The Supervisor builds one image per entry and marks the app unavailable elsewhere.
 arch:
   - amd64
+  - aarch64
 init: false
 startup: application
 boot: auto
@@ -80,6 +83,11 @@ options:
   helper_deadline: 240
   # helper that performs the PSA login and returns the tokens
   helper_cmd: "python3 /app/psa-browser-token.py"
+  # Which browser engine performs the login:
+  #   auto       = playwright if present, otherwise qt (default)
+  #   playwright = Chromium out of the Playwright package, headless, amd64 AND aarch64
+  #   qt         = PyQt5/QtWebEngine, the historical path, only in the amd64 image
+  browser_backend: auto
   trigger_port: 8909
   trigger_token: ""
   notify: true
@@ -116,6 +124,7 @@ schema:
   helper_timeout: int(15,300)
   helper_deadline: int(60,900)
   helper_cmd: str
+  browser_backend: list(auto|playwright|qt)
   trigger_port: port
   trigger_token: password?
   notify: bool

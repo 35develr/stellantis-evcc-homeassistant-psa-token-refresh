@@ -152,7 +152,28 @@ def test_slug_and_arch():
           "slug changed - the Supervisor would then find the add-on under another name")
     text = "\n".join(_read(CONFIG))
     check(re.search(r"^arch:\n(?:  - \S+\n)*  - amd64\n", text, re.MULTILINE),
-          "arch must contain amd64 (PyQt5 has no aarch64 wheels)")
+          "arch must contain amd64")
+    # aarch64 has been buildable since the Playwright backend exists; without the entry
+    # the Supervisor reports the app as 'not available' on a Raspberry Pi (issue #3)
+    check(re.search(r"^  - aarch64$", text, re.MULTILINE),
+          "arch must contain aarch64 (Playwright backend), otherwise ARM cannot install it")
+
+
+def test_browser_backend_option():
+    """The new engine switch: it has to ship with a value and a schema entry."""
+    _, blocks = get_config()
+    value = blocks["options"].get("browser_backend")
+    check(value is not None and value.strip() != "",
+          "browser_backend has no value - the Supervisor would make it mandatory")
+    check(value.strip() == "auto",
+          f"browser_backend should default to auto (Playwright first), is {value!r}")
+    schema = blocks["schema"].get("browser_backend", "")
+    check(schema.startswith("list("), f"browser_backend needs a choice list, is {schema!r}")
+    for choice in ("auto", "playwright", "qt"):
+        check(choice in schema, f"{choice} is missing from the browser_backend schema")
+    text = "\n".join(_read(ADDON_DIR + os.sep + "Dockerfile"))
+    check("BUILD_ARCH" in text and "python:3.12-bookworm" in text,
+          "the Dockerfile must build per architecture (BUILD_ARCH) on a Debian base")
 
 
 def main():

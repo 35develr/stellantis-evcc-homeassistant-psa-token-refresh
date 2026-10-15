@@ -78,8 +78,10 @@ Without `trigger_token` the endpoint is disabled.
 ## FAQ: do I need the upstream helper?
 
 No. The add-on is self-contained: `psa-browser-token.py` ships inside the image and is the
-default for `helper_cmd`. It drives the login chain with QtWebEngine by polling the page
-state, which is what works with the JavaScript-driven login pages PSA uses since 2026.
+default for `helper_cmd`. It drives the login chain with a real browser by polling the
+page state, which is what works with the JavaScript-driven login pages PSA uses since
+2026: Playwright/Chromium by default (amd64 **and** aarch64), QtWebEngine only as the
+fallback in the amd64 image - see "Browser backends" below.
 
 The older upstream "automated" script (`psa-token-helper-auto.py` from
 [hurzhurz/psa-token-helper](https://github.com/hurzhurz/psa-token-helper)) is **not**
@@ -131,9 +133,47 @@ answers on its port again. During this time Home Assistant answers there itself 
 | `helper_timeout` | timeout per login step (seconds); only the old helper uses this |
 | `helper_deadline` | overall deadline of the new helper in seconds (default 240) |
 | `helper_cmd` | program that fetches the tokens. Default: `python3 /app/psa-browser-token.py` |
+| `browser_backend` | engine for the login: `auto` (default), `playwright` or `qt` (amd64 only) |
 | `trigger_token` | password for the HTTP interface, empty = disabled |
 | `dry_run` | do everything, but do not change evcc (result in the log or as a file in `/data`) |
 | `notify` | create notifications in Home Assistant |
+
+## Browser backends
+
+Two engines can drive the login chain. `browser_backend: auto` (the default) picks
+**playwright** when it is installed and falls back to **qt** otherwise; both can be forced
+explicitly. The engine actually used is logged at start-up:
+
+```
+[psa] browser backend: playwright (configured: auto)
+[psa] playwright backend: 156.0.8078.4 (chromium), headless
+```
+
+* **playwright** - Chromium out of the Playwright package, headless, available for amd64
+  and aarch64. This is what makes the add-on installable on a Raspberry Pi 4/5, a Home
+  Assistant Green/Yellow or any other 64-bit ARM system. It needs no Xvfb - `run.sh` only
+  starts the virtual display when Xvfb exists in the image.
+* **qt** - the historical PyQt5/QtWebEngine path (plus Xvfb). It only exists in the amd64
+  image, because PyQtWebEngine has no Linux aarch64 wheels. Force it with
+  `browser_backend: qt` when Playwright misbehaves on a machine that used to work.
+
+Both run the same flow, so a fix applies to both; only the engine adapter differs. The
+engine is reported in `/status` and in the diagnosis file (`backend_configured` /
+`backend_used`), which makes it possible to tell "same add-on, different machine,
+different result" apart in one look.
+
+A note for maintainers, because it cost a day: the authorization code arrives on the
+redirect to the brand scheme (`mymap://oauth2redirect/...`). Chromium refuses that
+navigation (`net::ERR_ABORTED`, `page.url()` stays `about:blank`), and Playwright's
+`route()`/`page.route()` never sees it (microsoft/playwright#11014). The URL - including
+the code - is delivered as a `request` and `requestfailed` event instead, **but only while
+no route handler is registered on the context**: with an active `route()` the brand scheme
+URL is not reported at all. `tests/test_playwright_redirect.py` pins both halves of that
+down.
+
+Updating Chromium: bump the pinned `playwright==<version>` in `psa-token-refresh/Dockerfile`
+together with the browser (the image installs the headless shell only,
+`playwright install --with-deps --only-shell chromium`).
 
 ## Which version is running? (self-diagnosis)
 

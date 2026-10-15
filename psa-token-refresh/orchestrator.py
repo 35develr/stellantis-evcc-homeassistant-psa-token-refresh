@@ -105,6 +105,8 @@ def load_options() -> dict:
         "helper_deadline": 240,
         # own helper (polling, works with the new ForgeRock/Gigya chain);
         "helper_cmd": "python3 /app/psa-browser-token.py",
+        # browser engine of the helper: auto (playwright, then qt), playwright or qt
+        "browser_backend": "auto",
         "trigger_port": 8909,
         "trigger_token": "",
         "notify": True,
@@ -649,6 +651,8 @@ def fetch_tokens(opts: dict) -> dict:
         "-t", str(opts.get("helper_timeout", 45)),
         # ignored by the old helper (parse_known_args), the new one uses it
         "--deadline", str(opts.get("helper_deadline", 240)),
+        # engine for the login: playwright (default, amd64+aarch64) or qt (amd64 only)
+        "--backend", str(opts.get("browser_backend") or "auto"),
     ]
     log(f"fetching new tokens ({opts['brand']}) - this takes 30-90 s ...")
     try:
@@ -1181,6 +1185,7 @@ class Refresher:
         """Visits the login chain without credentials and returns the page dump."""
         cmd = shlex.split(self.opts["helper_cmd"]) + [
             "-b", self.opts["brand"], "--probe", "--probe-wait", str(wait_seconds),
+            "--backend", str(self.opts.get("browser_backend") or "auto"),
         ]
         log(f"login probe: visiting the chain for {self.opts['brand']} "
             "(without credentials, diagnosis only) ...")
@@ -1213,6 +1218,7 @@ class Refresher:
         result: dict = {
             "version": VERSION,
             "evcc_version": api.version() or "not reachable",
+            "browser_backend": opts.get("browser_backend"),
             "api_key_source": key_source,
             "psa_account_configured": bool(opts.get("account_user") and opts.get("account_password")),
             "mode_configured": opts.get("mode"),

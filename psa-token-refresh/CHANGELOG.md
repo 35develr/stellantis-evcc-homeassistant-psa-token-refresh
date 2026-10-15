@@ -1,3 +1,50 @@
+# 1.6.0 (2026-10-15)
+
+- **The add-on now also runs on aarch64 (issue #3 - "Install button stays grey").** The
+  browser engine is pluggable, the flow is not:
+  - `playwright` - new default. Chromium out of the Playwright package, headless, built for
+    amd64 **and** aarch64. This removes the reason for `arch: [amd64]`, which was
+    PyQtWebEngine having no Linux aarch64 wheels: on a Raspberry Pi, a Home Assistant
+    Green/Yellow or any other 64-bit ARM system the Supervisor reported the app as "not
+    available" and greyed the install button out.
+  - `qt` - the historical PyQt5/QtWebEngine path (plus Xvfb), kept as a fallback and built
+    only into the amd64 image.
+  - New option `browser_backend`: `auto` (default) | `playwright` | `qt`. `auto` prefers
+    Playwright and falls back to Qt. A configured engine that the image cannot deliver ends
+    with a named error instead of a traceback.
+  - Not supported and not claimed: `armv7`, `armhf` and `i386` - there is no Chromium build
+    for them.
+- **The flow (poll, decide, act) is shared by both engines.** It used to live inside
+  `run_browser()` and was therefore reachable only with a running QtWebEngine, i.e. it had
+  no test coverage. `tests/test_browser_backends.py` now drives it with a scripted fake
+  backend - no browser, no network, no Qt, no Playwright.
+- **The authorization code is picked up differently in the Playwright path**, and this is
+  the part that costs a day if it is not known: Chromium refuses the navigation to the brand
+  scheme (`net::ERR_ABORTED`, the document is never committed, `page.url()` stays
+  `about:blank`), and Playwright's `route()` API never sees that URL
+  (microsoft/playwright#11014). The code arrives as a `request` / `requestfailed` event -
+  **but only while no route handler is registered on the context**; with an active
+  `route()` the brand scheme URL is not reported at all.
+  `tests/test_playwright_redirect.py` pins both halves down against a fake OAuth chain,
+  including the intermediate hop whose foreign `code=` must not be used.
+- Anti-bot detail: the headless Chromium announces itself as `HeadlessChrome/...` and
+  reports `navigator.webdriver = true`. The backend now sends a plain Chrome user agent and
+  hides the webdriver flag; `PSA_BROWSER_UA=keep` in the environment disables that
+  (diagnosis). Not verified against the real PSA login chain yet.
+- `psa-token-refresh/Dockerfile` builds per architecture (`BUILD_ARCH`, passed by the
+  Supervisor): both images install `playwright==1.64.0` and the headless shell
+  (`--only-shell`, roughly 260 MB unpacked), the amd64 image additionally PyQt5/
+  PyQtWebEngine and Xvfb. `run.sh` starts the virtual display only when Xvfb exists.
+- Diagnostics: `browser_backend` is reported by `/status`, and the diagnosis dump carries
+  `backend_configured` / `backend_used` - that is what separates "same add-on, different
+  machine, different result" from a real failure.
+- Fixed the placeholder repository URL in `config.yaml` and `repository.yaml`
+  (`github.com/yourname/...` -> the real repository): the link on the app page was dead.
+- Tests: `tests/test_browser_backends.py` (backend choice matrix, flow, deadline,
+  probe, unusable backend) and `tests/test_playwright_redirect.py` (real browser, skipped
+  when no browser binary is installed); `tests/test_config_yaml.py` additionally pins the
+  architecture list, the new option and the per-architecture Dockerfile.
+
 # 1.5.0 (2026-10-13)
 
 - **evcc no longer has to be an add-on (issue #2).** New option `evcc_control`:

@@ -31,10 +31,26 @@ really works afterwards.
 | Requirement | Why |
 | ----------- | --- |
 | Home Assistant OS / Supervised with Supervisor | add-ons and the stop/start API only exist there |
-| **amd64** (x86_64) | PyQt5/PyQtWebEngine exist on PyPI only for x86_64 - the image cannot be built on a Raspberry Pi |
+| **amd64** (x86_64) or **aarch64** | the default engine is Playwright/Chromium, which exists for both. `armv7`/`armhf`/`i386` are not supported (no Chromium build) |
 | evcc as an **add-on** | default path: the package stops/starts exactly this add-on. Since 1.5.0 an evcc **without** the add-on works too (`evcc_control: api` / `webhook`, see below) |
 | PSA account **without two-factor login** | the automatic login cannot do 2FA |
-| about 700 MB free disk | Python + QtWebEngine + Xvfb |
+| about 700 MB free disk | Python + Chromium (headless shell); the amd64 image additionally carries QtWebEngine + Xvfb |
+
+### Browser backends
+
+The login chain is driven by a real browser. Two engines can do that, and the add-on picks
+one automatically (`browser_backend: auto`):
+
+| Backend | When | Notes |
+| ------- | ---- | ----- |
+| `playwright` | default, **amd64 and aarch64** | Chromium out of the Playwright package, headless. Without `xvfb`, without a Qt installation. |
+| `qt` | fallback, **amd64 image only** | the historical PyQt5/QtWebEngine path plus Xvfb. Kept because it is the engine that has been running in the field; PyQtWebEngine has no Linux aarch64 wheels, so aarch64 images cannot offer it. |
+
+Both run the same flow (poll the page, decide, act) - only the engine differs, so a bug fix
+in the flow applies to both. The engine in use is written to the log at start-up
+(`[psa] browser backend: …`) and into the diagnosis/the `/status` output
+(`browser_backend`), which is the first thing to look at when a login behaves differently
+on two machines.
 
 ## Repository layout
 
@@ -150,6 +166,7 @@ The most important options:
 | `rotate_user_key` | set the `user` field to a new generation (recommended) |
 | `skip_while_charging` | do not renew while a car is charging |
 | `helper_deadline` | overall deadline of the helper in seconds (default 240) |
+| `browser_backend` | engine that performs the login: `auto` (default; Playwright, otherwise Qt), `playwright` or `qt` (amd64 only) |
 | `trigger_token` | password for the HTTP interface, empty = disabled |
 | `dry_run` | do everything, but do not change evcc (result in the log or as a file in `/data`) |
 | `notify` | create notifications in Home Assistant |
