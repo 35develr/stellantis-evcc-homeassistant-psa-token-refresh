@@ -110,12 +110,66 @@ def test_same_version_keeps_the_backoff():
     check(read_state()["next_attempt_ts"] > time.time(), "wait was wrongly deleted")
 
 
+def test_changed_options_clear_the_backoff():
+    """Correcting a setting must allow the next attempt (report of 2026-10-19)."""
+    write_state(last_version=o.VERSION, next_attempt_ts=time.time() + 900,
+                last_error="vehicle 'Opel Grandland' not found as '- name: Opel Grandland'",
+                failure_options=o.options_fingerprint({"vehicles": [{"name": "Opel Grandland"}]}))
+    reason, out = capture(refresher().detect_reason)
+    check("options changed since the last failure" in out,
+          f"the cleared wait is not reported: {out[:200]}")
+    check(read_state().get("next_attempt_ts") == 0, "wait was not reset")
+    check(reason is not None, "after correcting the options a check must happen")
+
+
+def test_unknown_fingerprint_keeps_the_backoff():
+    """State from an older release has no fingerprint - an update must not clear a wait."""
+    write_state(last_version=o.VERSION, next_attempt_ts=time.time() + 900,
+                last_error="token helper failed (exit 1)")
+    reason, _ = capture(refresher().detect_reason)
+    check(reason is None, "the update must not drop a running wait")
+    check(read_state()["next_attempt_ts"] > time.time(), "wait was wrongly deleted")
+    check(read_state().get("failure_options"), "the fingerprint was not recorded")
+
+
+def test_same_options_keep_the_backoff():
+    r = refresher()
+    write_state(last_version=o.VERSION, next_attempt_ts=time.time() + 900,
+                last_error="HTTP 401", failure_options=o.options_fingerprint(r.opts))
+    reason, _ = capture(r.detect_reason)
+    check(reason is None, "unchanged options must not clear the wait")
+
+
+def test_start_clears_the_backoff():
+    r = refresher()
+    write_state(last_version=o.VERSION, next_attempt_ts=time.time() + 1500,
+                last_error="vehicle 'Grandland' not found")
+    _, out = capture(r.start_clears_backoff)
+    check("start clears the wait after the last failure" in out,
+          f"the clear is not reported: {out[:200]}")
+    check(read_state().get("next_attempt_ts") == 0, "the restart did not clear the wait")
+    check(read_state().get("failure_options") == o.options_fingerprint(r.opts),
+          "the fingerprint was not recorded on start")
+
+
+def test_start_without_a_failure_stays_quiet():
+    r = refresher()
+    write_state(last_version=o.VERSION, next_attempt_ts=0)
+    _, out = capture(r.start_clears_backoff)
+    check(out.strip() == "", f"nothing may be logged without a wait: {out!r}")
+
+
 if __name__ == "__main__":
     test_waiting_is_reported_instead_of_status_ok()
     test_backoff_remaining_reports_seconds_and_error()
     test_expired_backoff_does_not_block()
     test_new_version_clears_the_backoff()
     test_same_version_keeps_the_backoff()
+    test_changed_options_clear_the_backoff()
+    test_unknown_fingerprint_keeps_the_backoff()
+    test_same_options_keep_the_backoff()
+    test_start_clears_the_backoff()
+    test_start_without_a_failure_stays_quiet()
     print()
     if FAILS:
         print(f"{len(FAILS)} test(s) failed")

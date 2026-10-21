@@ -303,8 +303,13 @@ looks plausible, the wiring is fine.
    - e3008: test config accepted by evcc
    - e3008: new tokens stored in evcc (user -> user@example.org#202609291215)
    starting evcc add-on ... evcc is running again
+   PSA poll observed after 12 s: evcc reports e3008 soc 71%, range 310 km, odometer 41230 km
    refresh successfully verified (API mode)
    ```
+   The line before the last one is the actual proof: only when evcc reports vehicle data
+   did PSA accept the new token. evcc polls a vehicle only while it is assigned to a
+   loadpoint; if none is, the log says `no PSA poll observable ...` and the verification
+   falls back to the evcc log (and to `verify_delay_seconds`).
    At the end a notification "PSA tokens renewed" arrives in Home Assistant.
 
 If you do not want the test run of the new configuration before saving

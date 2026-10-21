@@ -173,6 +173,57 @@ class EvccApi:
     def state(self) -> dict:
         return self._json("GET", "/api/state") or {}
 
+    def wait_for_vehicle_poll(self, names: list[str], timeout: int = 180,
+                              interval: float = 3.0) -> tuple[bool, str]:
+        """Waits until evcc reports vehicle data it could only get from PSA.
+
+        Storing a token only proves that evcc accepted the configuration - not that PSA
+        accepts the token. The proof is the first successful poll, and evcc only polls a
+        vehicle while it is assigned to a loadpoint. With no assignment (car not
+        connected, no vehicle in the loadpoint) there is nothing to observe: then this
+        returns at once with observed=False and the caller falls back to the log check.
+        """
+        wanted = {str(n).strip().casefold() for n in (names or []) if str(n).strip()}
+        beginn = time.time()
+        zuletzt = "no vehicle data yet"
+        leer = 0                      # consecutive polls without any assignment
+        while True:
+            try:
+                data = self.state()
+            except EvccApiError as exc:
+                data, zuletzt = {}, str(exc)
+            zugeordnet = False
+            for loadpoint in (data.get("loadpoints") or []):
+                titel = str(loadpoint.get("vehicleTitle")
+                            or loadpoint.get("vehicleName") or "").strip()
+                if not titel:
+                    continue
+                if wanted and titel.casefold() not in wanted:
+                    continue
+                zugeordnet = True
+                soc = loadpoint.get("vehicleSoc") or 0
+                reichweite = loadpoint.get("vehicleRange") or 0
+                kilometer = loadpoint.get("vehicleOdometer") or 0
+                if soc or reichweite or kilometer:
+                    return True, (
+                        f"PSA poll observed after {int(time.time() - beginn)} s: "
+                        f"evcc reports {titel} soc {soc}%, range {reichweite} km, "
+                        f"odometer {kilometer} km")
+                zuletzt = f"{titel}: loadpoint has no vehicle data yet"
+            if zugeordnet:
+                leer = 0
+            else:
+                leer += 1
+                if leer >= 2:
+                    return False, (
+                        "no PSA poll observable - none of the configured vehicles is "
+                        "assigned to a loadpoint (evcc only polls assigned vehicles); "
+                        "the evcc log is checked instead")
+            if time.time() - beginn >= timeout:
+                return False, (f"no PSA poll within {timeout} s ({zuletzt}); "
+                               "the evcc log is checked instead")
+            time.sleep(interval)
+
     # ------------------------------------------------------------ control
 
     def shutdown(self, timeout: int = 20) -> tuple[bool, str]:

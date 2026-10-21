@@ -27,6 +27,7 @@ Standard library only (urllib) - the token helper needs PyQt5/QtWebEngine (Docke
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,7 +47,7 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION_FALLBACK = "1.7.0"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.7.1"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -69,10 +70,55 @@ def _read_version() -> str:
 
 
 VERSION = _read_version()
-ERROR_PATTERNS = re.compile(
-    r"token expired|invalid_grant|invalid_token|cannot create vehicle type 'template'"
-    r"|authentication failed|401 Unauthorized"
+# Token errors evcc writes to its log. Unambiguous ones name the token/vehicle and are
+# trusted everywhere; the generic ones ("authentication failed", "401 Unauthorized") also
+# occur for tariffs, MQTT or other devices, so they only count on a line that mentions the
+# PSA context - otherwise a foreign 401 turned a healthy renewal red (and would even
+# trigger a refresh every interval in detect_reason).
+TOKEN_ERROR_PATTERNS = (
+    "token expired",
+    "invalid_grant",
+    "invalid_token",
+    "cannot create vehicle type 'template'",
 )
+GENERIC_ERROR_PATTERNS = (
+    "authentication failed",
+    "401 Unauthorized",
+)
+PSA_CONTEXT_RE = re.compile(
+    r"psa|peugeot|opel|citroen|\bds\b|stellantis|vehicle|fahrzeug", re.IGNORECASE)
+
+
+def _fresh_lines(baseline: str, current: str) -> list[str]:
+    """Lines of `current` that are not already in `baseline` (multiset, line by line).
+
+    The evcc log is a rolling window: counting pattern occurrences would make an old,
+    already handled error look new again as soon as the window scrolls.
+    """
+    seen: dict[str, int] = {}
+    for line in (baseline or "").splitlines():
+        seen[line] = seen.get(line, 0) + 1
+    fresh = []
+    for line in (current or "").splitlines():
+        if seen.get(line):
+            seen[line] -= 1
+            continue
+        fresh.append(line)
+    return fresh
+
+
+def new_token_errors(baseline: str, current: str) -> list[str]:
+    """Token-error patterns from log lines that appeared since `baseline`."""
+    hits: list[str] = []
+    for line in _fresh_lines(baseline, current):
+        for pattern in TOKEN_ERROR_PATTERNS:
+            if pattern in line and pattern not in hits:
+                hits.append(pattern)
+        if PSA_CONTEXT_RE.search(line):
+            for pattern in GENERIC_ERROR_PATTERNS:
+                if pattern in line and pattern not in hits:
+                    hits.append(pattern)
+    return hits
 
 
 # ---------------------------------------------------------------- basic helpers
@@ -164,6 +210,18 @@ def maskiere_optionen(options):
 
 def state_path() -> str:
     return os.path.join(data_dir(), "state.json")
+
+
+def options_fingerprint(opts: dict) -> str:
+    """Short hash over the complete set of options.
+
+    A failed run is bound to the options it happened with. After the vehicle name, the
+    API key or anything else was corrected, waiting out the backoff is pointless - that
+    is exactly what happened on 2026-10-19: the vehicle was renamed from
+    "Opel Grandland" to "Grandland", and the add-on still refused to try for 24 minutes.
+    """
+    blob = json.dumps(opts, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def load_state() -> dict:
@@ -1009,16 +1067,22 @@ class Refresher:
     def _verify_api(self, api: EvccApi, state: dict, reason: str,
                     resolved: list, restart_done: bool,
                     original_log: str = "") -> bool:
-        delay = max(10, int(self.opts.get("verify_delay_seconds", 45)))
-        if restart_done:
-            time.sleep(delay)
+        # A fixed grace period cannot tell whether the new token works: after 45 s evcc
+        # may not have polled PSA at all. Wait for the first poll instead - that is the
+        # only proof, and it ends the wait as soon as the data is there.
+        names = [veh["name"] for veh, *_ in resolved]
+        poll_timeout = max(0, int(self.opts.get("verify_poll_timeout_seconds", 180)))
+        observed, detail = api.wait_for_vehicle_poll(names, timeout=poll_timeout)
+        log(detail)
+        if restart_done and not observed:
+            # Nothing to observe (no vehicle on a loadpoint): keep the old fixed grace
+            # so that log lines written shortly after the restart are still caught.
+            time.sleep(max(10, int(self.opts.get("verify_delay_seconds", 45))))
         evcc_log = api.log()
-        # Only count NEW errors: the restart regularly makes evcc
-        # start once more with the old, used-up token ("invalid_grant")
-        # - that is expected and must not paint the verification red.
-        broken = [p for p in ("token expired", "invalid_grant",
-                              "cannot create vehicle type 'template'")
-                  if p in evcc_log and p not in original_log]
+        # Only count NEW errors on lines that appeared since the write: the restart
+        # regularly makes evcc start once more with the old, used-up token
+        # ("invalid_grant") - that is expected and must not paint the verification red.
+        broken = new_token_errors(original_log, evcc_log)
         if broken:
             raise RuntimeError(
                 "evcc still reports token problems (" + ", ".join(broken) + "). "
@@ -1035,14 +1099,19 @@ class Refresher:
             "fails": 0,
             "next_attempt_ts": 0,
             "vehicles": [veh["name"] for veh, *_ in resolved],
+            "last_verify": {"psa_poll_observed": observed, "detail": detail},
         })
         save_state(state)
-        log("refresh successfully verified (API mode)")
+        log("refresh successfully verified (API mode)"
+            + ("" if observed else " - no PSA poll observable, checked the evcc log only"))
         self.sup.notify(
             "PSA tokens renewed",
             f"Reason: {reason}\nMode: evcc-API\n"
             f"Vehicles: {', '.join(veh['name'] for veh, *_ in resolved)}\n"
-            + ("evcc restarted." if restart_done else "No restart needed.")
+            + ("evcc restarted." if restart_done else "No restart needed.") + "\n"
+            + ("PSA poll observed - the new token works."
+               if observed else
+               "No PSA poll observable (vehicle not on a loadpoint) - verified via evcc log.")
             + f"\nVersion {VERSION}",
         )
         return True
@@ -1126,9 +1195,7 @@ class Refresher:
                 )
             time.sleep(max(10, int(opts.get("verify_delay_seconds", 45))))
             fresh_log = self.sup.evcc_log()
-            still = [p for p in ("token expired", "invalid_grant",
-                                 "cannot create vehicle type 'template'")
-                     if p in fresh_log and p not in original_log]
+            still = new_token_errors(original_log, fresh_log)
             if still:
                 raise RuntimeError(
                     "evcc still reports token problems after the restart ("
@@ -1158,6 +1225,23 @@ class Refresher:
 
     # --- detection / diagnosis
 
+    def start_clears_backoff(self) -> None:
+        """A (re)start of the add-on clears the wait after the last failure.
+
+        Restarting after correcting a setting used to change nothing: the wait survived
+        the restart and the add-on stayed idle for the rest of the backoff (report of
+        2026-10-19: renamed the vehicle, restart at 18:53, still 24 minutes of waiting).
+        A restart is a deliberate act - whoever restarts wants a new attempt.
+        """
+        state = load_state()
+        state["failure_options"] = options_fingerprint(self.opts)
+        rest = float(state.get("next_attempt_ts") or 0) - time.time()
+        if rest > 0:
+            log(f"start clears the wait after the last failure "
+                f"({int(rest / 60) + 1} min, last error: {state.get('last_error') or 'unknown'})")
+            state["next_attempt_ts"] = 0
+        save_state(state)
+
     def backoff_remaining(self) -> tuple[float, str]:
         """Remaining wait after the last failure (seconds, last error)."""
         state = load_state()
@@ -1177,6 +1261,21 @@ class Refresher:
             state["last_version"] = VERSION
             save_state(state)
 
+        # Same for corrected options: the failure belongs to the old configuration.
+        # An empty fingerprint (state from an older release) is only recorded, not
+        # acted on - a running wait must not be dropped just because of the update.
+        fingerprint = options_fingerprint(self.opts)
+        known = state.get("failure_options")
+        if known and known != fingerprint:
+            if float(state.get("next_attempt_ts") or 0) > now:
+                log("options changed since the last failure - the wait is cleared")
+            state["next_attempt_ts"] = 0
+            state["failure_options"] = fingerprint
+            save_state(state)
+        elif not known:
+            state["failure_options"] = fingerprint
+            save_state(state)
+
         if now < float(state.get("next_attempt_ts") or 0):
             rest, letzter_fehler = self.backoff_remaining()
             log(f"no action: after the last failure, still waiting "
@@ -1194,7 +1293,7 @@ class Refresher:
             pass
         if not evcc_log and self.sup.available:
             evcc_log = self.sup.evcc_log()
-        if evcc_log and ERROR_PATTERNS.search(evcc_log):
+        if evcc_log and new_token_errors("", evcc_log):
             return "token error detected in the evcc log"
 
         days = float(self.opts.get("proactive_refresh_days") or 0)
@@ -1445,6 +1544,9 @@ def main() -> int:
     if "--dump" in sys.argv:
         print(json.dumps(refresher.diag(dump=True), indent=2, ensure_ascii=False))
         return 0
+
+    refresher.start_clears_backoff()
+
     if "--once" in sys.argv:
         return 0 if refresher.run("manuell (--once)") else 1
 

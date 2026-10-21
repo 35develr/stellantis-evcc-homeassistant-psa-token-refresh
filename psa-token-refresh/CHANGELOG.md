@@ -1,3 +1,37 @@
+# 1.7.1 (2026-10-21)
+
+- **A restart clears the wait after a failure.** After a failed run the add-on waits
+  `retry_backoff_minutes` (default 30). Restarting the add-on did not help: the wait
+  survived it, so a corrected setting still meant idling for the rest of the backoff -
+  see the log in #3 (vehicle renamed at 18:53, still `no action: after the last failure,
+  still waiting 24 min (until 19:16)`).
+- **Changing any option clears the wait as well.** The state now records a fingerprint of
+  the options the failure happened with (`failure_options`); a different fingerprint on
+  the next round logs `options changed since the last failure - the wait is cleared` and
+  allows the attempt. State from an older release only gets the fingerprint recorded, so
+  an update does not silently drop a running wait.
+- **The verification now waits for the first PSA poll instead of a fixed 45 s.** Storing
+  the tokens only proves that evcc accepted the configuration, not that PSA accepts the
+  token; after 45 s evcc may not have polled at all. `evcc_api.wait_for_vehicle_poll()`
+  polls `/api/state` until a loadpoint reports `vehicleSoc`/`vehicleRange`/
+  `vehicleOdometer` for one of the configured vehicles and logs
+  `PSA poll observed after N s: evcc reports <vehicle> soc …%`. Since evcc only polls
+  vehicles that are assigned to a loadpoint, a vehicle that is not on a loadpoint has
+  nothing to observe: then it says so, falls back to the previous grace period
+  (`verify_delay_seconds`) and to the log check, and the notification states which of
+  the two happened. New option `verify_poll_timeout_seconds` (default 180, 0 = off).
+- **The verification uses the full error-pattern list, not three of six.** `_verify_api`
+  and the YAML path had their own tuple with `token expired`, `invalid_grant` and
+  `cannot create vehicle type 'template'` and ignored the three further patterns the
+  detection already knew - so `invalid_token`, `authentication failed` and
+  `401 Unauthorized` passed a renewal as successful (#3). All log checks now share
+  `new_token_errors()`,
+  which compares line by line against the log from before the write (a scrolling log
+  window no longer makes an old error look new). The generic patterns
+  (`authentication failed`, `401 Unauthorized`) only count on a line that mentions the
+  PSA context (`psa`, brand, `vehicle`, …) - a foreign 401 from tariffs or MQTT must not
+  turn a healthy renewal red or trigger a refresh every interval.
+
 # 1.7.0 (2026-10-15)
 
 - **Fail-over between the browser engines.** With `browser_backend: auto` (the default) the

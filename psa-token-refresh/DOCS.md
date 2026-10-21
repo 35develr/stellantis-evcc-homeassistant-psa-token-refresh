@@ -127,7 +127,9 @@ answers on its port again. During this time Home Assistant answers there itself 
 | `api_payload_nested` | only needed if evcc expects the PUT body nested |
 | `check_interval_minutes` | check interval, default 60 |
 | `proactive_refresh_days` | renew preventively after X days, `0` = off |
-| `retry_backoff_minutes` | wait time after a failure |
+| `retry_backoff_minutes` | wait time after a failure; cleared by a restart or a changed option |
+| `verify_poll_timeout_seconds` | how long the verification waits for the first PSA poll, default 180, `0` = off |
+| `verify_delay_seconds` | grace after an evcc restart when no poll can be observed (default 45) |
 | `rotate_user_key` | set the `user` field to a new generation (recommended) |
 | `skip_while_charging` | do not renew while a car is charging |
 | `helper_timeout` | timeout per login step (seconds); only the old helper uses this |
@@ -228,8 +230,12 @@ Test immediately via the HTTP trigger (ignores the wait):
 
     curl -X POST -H "X-Trigger-Token: <token>" http://<host>:8909/refresh
 
-If a new add-on version starts, a running wait expires automatically -
-so after an update you do not have to wait.
+A running wait expires automatically in three cases: a new add-on version starts, the
+add-on is restarted, or any option was changed (the state records a fingerprint of the
+options the failure happened with, `failure_options`). So after correcting a vehicle
+name or an API key you do not have to wait out the backoff - the log then says
+`start clears the wait after the last failure (...)` or
+`options changed since the last failure - the wait is cleared`.
 
 ## When writing returns "404 page not found"
 

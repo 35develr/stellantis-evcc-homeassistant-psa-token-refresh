@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.7.0"
+version: "1.7.1"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -72,6 +72,12 @@ options:
   check_interval_minutes: 60
   proactive_refresh_days: 30
   retry_backoff_minutes: 30
+  # Verification waits for evcc to report vehicle data it could only get from PSA -
+  # that is the only proof the new token works. 0 = do not wait (log check only).
+  # Without a vehicle on a loadpoint there is nothing to observe and it goes at once
+  # to the log check (then the fixed grace below still applies).
+  verify_poll_timeout_seconds: 180
+  # Grace after an evcc restart when no PSA poll is observable.
   verify_delay_seconds: 45
   # How long to wait after an evcc restart until evcc answers on its port again
   # (otherwise Home Assistant answers there and returns 404).
@@ -118,6 +124,7 @@ schema:
   check_interval_minutes: int(5,1440)
   proactive_refresh_days: int(0,365)
   retry_backoff_minutes: int(5,1440)
+  verify_poll_timeout_seconds: int(0,900)
   verify_delay_seconds: int(10,600)
   evcc_ready_timeout: int(10,600)
   rotate_user_key: bool
