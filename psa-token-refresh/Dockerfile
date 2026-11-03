@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="1.8.1"
+ARG BUILD_VERSION="1.8.2"
 ARG BUILD_ARCH="amd64"
 
 FROM python:3.12-bookworm

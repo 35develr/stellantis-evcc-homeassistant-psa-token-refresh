@@ -1,3 +1,17 @@
+# 1.8.2 (2026-11-03)
+
+- **The login service now logs why a login failed.** The helper's output was captured and
+  discarded, so the add-on log only said "login service: fetching an OAuth code" followed
+  by a 400 - and the integration's UI shows `Unknown error occurred` on a reconfigure
+  (`async_abort` with a free-text reason cannot be translated). The last 12 stderr lines,
+  the stdout tail, the diagnosis verdict and the last four visited URLs are now logged.
+- **The answer now always arrives before the caller gives up.** The helper deadline was
+  `helper_deadline` (240 s) with a subprocess timeout of `deadline + 120` (360 s) - the
+  integration abandons the request after 300 s, which produced `BrokenPipeError`
+  tracebacks and no diagnosable answer. The login service caps the helper at 210 s and the
+  subprocess at 240 s.
+- A client that disconnects before the response is sent no longer raises a traceback.
+
 # 1.8.1 (2026-11-03)
 
 - **`POST /` works as an alias for `/oauth-code`.** The integration sends its request to

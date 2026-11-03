@@ -50,7 +50,7 @@ from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 LOG_PREFIX = "psa-token-refresh"
 # Seconds the login service waits for a running login before answering 409.
 OAUTH_LOCK_WAIT = 20.0
-VERSION_FALLBACK = "1.8.1"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.8.2"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -1329,7 +1329,10 @@ class Refresher:
             raise ValueError("url, email and password are required")
         if not url.startswith("https://"):
             raise ValueError("url must be an https URL")
-        deadline = int(deadline or self.opts.get("helper_deadline") or 240)
+        # The integration gives up after 300 s (make_http_request timeout). The helper's
+        # own deadline must therefore stay well below it - otherwise the answer comes
+        # after the caller is gone (BrokenPipeError, and the UI only shows a timeout).
+        deadline = min(int(deadline or self.opts.get("helper_deadline") or 240), 210)
         cmd = shlex.split(self.opts["helper_cmd"]) + [
             "-b", self.opts["brand"],
             "-u", email,
@@ -1347,7 +1350,7 @@ class Refresher:
         try:
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      timeout=deadline + 120, check=False)
+                                      timeout=deadline + 30, check=False)
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError("login helper hit a hard timeout") from exc
         finally:
@@ -1358,8 +1361,18 @@ class Refresher:
                 code = line.strip()
                 break
         if proc.returncode != 0 or not code:
+            # The helper's output is captured, so without this the add-on log would
+            # only say "login failed" - and the integration's UI shows nothing
+            # useful at all on a reconfigure (async_abort with a free-text reason).
+            for line in (proc.stderr or "").strip().splitlines()[-12:]:
+                log(f"login service: helper: {line.strip()[:300]}")
+            log(f"login service: helper stdout tail: {(proc.stdout or '').strip()[-400:]!r}")
             diagnosis = helper_diagnosis() or {}
             detail = diagnosis.get("deutung") or ""
+            if detail:
+                log(f"login service: diagnosis: {detail}")
+            for url in (diagnosis.get("url_verlauf") or [])[-4:]:
+                log(f"login service: visited: {str(url)[:160]}")
             raise RuntimeError(
                 f"login failed (exit {proc.returncode})"
                 + (f": {detail}" if detail else "")
@@ -1520,7 +1533,12 @@ def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServe
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # The caller gave up (the integration times out after 300 s) - a
+                # traceback in the log helps nobody here.
+                log(f"HTTP client gone before the {code} response was sent")
 
         def do_GET(self) -> None:  # noqa: N802
             if not self._authorized():
