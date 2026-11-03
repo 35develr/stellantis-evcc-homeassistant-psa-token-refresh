@@ -50,7 +50,7 @@ from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 LOG_PREFIX = "psa-token-refresh"
 # Seconds the login service waits for a running login before answering 409.
 OAUTH_LOCK_WAIT = 20.0
-VERSION_FALLBACK = "1.8.2"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.8.3"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -298,6 +298,38 @@ class Supervisor:
             f"{self.base}{path}", method=method, body=body,
             headers={"Authorization": f"Bearer {self.token}"}, timeout=timeout,
         )
+
+    def announce_discovery(self, port: int) -> None:
+        """Advertise the local login service to Home Assistant (Supervisor discovery).
+
+        The integration "Stellantis Vehicles" implements `async_step_hassio`: the
+        host/port announced here pre-fill its "Login service URL", so the user does
+        not have to type the address. Integrations without that step drop the
+        payload silently - announcing is therefore harmless but only useful once
+        the integration knows about it (1.8.3+ of this add-on, PR #709 upstream).
+        """
+        if not self.available:
+            return
+        host = ""
+        status, text = self._call("/addons/self/info", timeout=15)
+        if status == 200:
+            try:
+                info = json.loads(text).get("data") or {}
+                host = str(info.get("hostname") or info.get("slug") or "").strip()
+            except (ValueError, AttributeError):
+                host = ""
+        if not host:
+            log(f"WARNING: discovery skipped - the Supervisor reported no hostname "
+                f"(HTTP {status}): {text[:120]}")
+            return
+        payload = {"service": "stellantis_vehicles",
+                   "config": {"host": host, "port": int(port)}}
+        status, text = self._call("/discovery", method="POST", body=payload, timeout=15)
+        if 200 <= status < 300:
+            log(f"discovery: announced the login service to Home Assistant as "
+                f"http://{host}:{port}")
+        else:
+            log(f"WARNING: discovery announcement failed (HTTP {status}): {text[:200]}")
 
     def list_apps(self, reload: bool = False) -> list[dict]:
         """Installed add-ons per Supervisor (for slug lookup and diagnosis)."""
@@ -1690,7 +1722,9 @@ def main() -> int:
     if "--once" in sys.argv:
         return 0 if refresher.run("manuell (--once)") else 1
 
-    start_trigger_server(refresher, opts)
+    server = start_trigger_server(refresher, opts)
+    if server is not None and opts.get("oauth_service", True):
+        supervisor.announce_discovery(int(server.server_address[1]))
 
     interval = max(1, int(opts["check_interval_minutes"])) * 60
     missing_warned = False

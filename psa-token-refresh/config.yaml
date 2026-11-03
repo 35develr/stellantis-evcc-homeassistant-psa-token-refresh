@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.8.2"
+version: "1.8.3"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -23,6 +23,11 @@ homeassistant_api: true
 map:
   - type: all_addon_configs
     read_only: false
+# Announce the login service to Home Assistant (Supervisor discovery) so the
+# integration "Stellantis Vehicles" pre-fills its "Login service URL" itself.
+# Ignored by integrations that do not implement async_step_hassio.
+discovery:
+  - stellantis_vehicles
 
 options:
   # --- Mode ------------------------------------------------------------------

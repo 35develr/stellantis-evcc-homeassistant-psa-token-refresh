@@ -1,3 +1,15 @@
+# 1.8.3 (2026-11-03)
+
+- **The add-on announces its login service to Home Assistant.** On start it posts
+  `{"service": "stellantis_vehicles", "config": {"host": <hostname>, "port": 8909}}` to
+  `http://supervisor/discovery` (new `discovery:` key in `config.yaml`). With the
+  integration "Stellantis Vehicles" PR #709
+  (`async_step_hassio`) the "Login service URL" is then pre-filled by Home Assistant -
+  no more typing the address. Older integration versions ignore the announcement; it
+  costs one request at start and changes nothing for them.
+- The announcement is skipped when `oauth_service: false`, when the add-on does not run
+  under a Supervisor, and when the Supervisor reports no hostname (warning in the log).
+
 # 1.8.2 (2026-11-03)
 
 - **The login service now logs why a login failed.** The helper's output was captured and
