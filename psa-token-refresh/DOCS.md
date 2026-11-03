@@ -73,7 +73,36 @@ If `trigger_token` is set, the add-on listens on `trigger_port` (default 8909):
 | `GET /dump` | like `/status`, plus the actual evcc vehicle configurations and the planned PUT body (tokens as placeholders) |
 
 All calls need the header `X-Trigger-Token: <trigger_token>` (or `?token=`).
-Without `trigger_token` the endpoint is disabled.
+Without `trigger_token` these endpoints are disabled.
+
+### Login service for the Home Assistant integration
+
+The integration
+[Stellantis Vehicles](https://github.com/andreadegiovine/homeassistant-stellantis-vehicles)
+does not log in itself: it asks a *login service* for an OAuth code. By default that is a
+shared Render.com worker (free tier), which is the usual reason for `Get oauth code error`
+when a token has to be renewed. The add-on offers the same contract locally:
+
+```
+POST /oauth-code
+{"url": "<authorize URL from the integration>", "email": "...", "password": "..."}
+-> 200 {"code": "..."}      (or 400 {"message": "...", "code": 400})
+```
+
+In the integration's remote-login step enter `http://<HA-IP>:<trigger_port>` as
+**Login service URL** (e.g. `http://192.168.10.10:8909`). The URL is stored in the config
+entry, so it survives a reauth.
+
+- No trigger token: the integration cannot send one. The endpoint is therefore only
+  reachable from private source addresses (LAN, loopback, Docker networks) and can be
+  switched off with `oauth_service: false`.
+- It uses the same browser and the same lock as the scheduled refresh, so two logins never
+  run at the same time.
+- The credentials are only passed to the helper process; they are not stored and not
+  logged (the log line names the account, not the password).
+- This only fixes the *code* step. The integration still renews its own tokens; if it
+  reports `invalid_grant` it needs a reauth, which now runs against this add-on instead of
+  Render.
 
 ## FAQ: do I need the upstream helper?
 
@@ -136,7 +165,8 @@ answers on its port again. During this time Home Assistant answers there itself 
 | `helper_deadline` | overall deadline of the new helper in seconds (default 240) |
 | `helper_cmd` | program that fetches the tokens. Default: `python3 /app/psa-browser-token.py` |
 | `browser_backend` | engine for the login: `auto` (default), `playwright` or `qt` (amd64 only) |
-| `trigger_token` | password for the HTTP interface, empty = disabled |
+| `trigger_token` | password for the HTTP interface, empty = `/refresh`, `/status`, `/dump` disabled |
+| `oauth_service` | `true` (default) = `POST /oauth-code` login service for the HA integration "Stellantis Vehicles", LAN only |
 | `dry_run` | do everything, but do not change evcc (result in the log or as a file in `/data`) |
 | `notify` | create notifications in Home Assistant |
 

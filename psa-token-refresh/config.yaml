@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.7.1"
+version: "1.8.0"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -97,6 +97,13 @@ options:
   browser_backend: auto
   trigger_port: 8909
   trigger_token: ""
+  # Login service for the Home Assistant integration
+  # "Stellantis Vehicles" (andreadegiovine/homeassistant-stellantis-vehicles):
+  # POST /oauth-code with {url, email, password} returns {"code": ...} - the same
+  # contract as the shared Render.com worker, but local. Enter
+  # http://<HA-IP>:<trigger_port> as "Login service URL" in the integration.
+  # No trigger token (the integration cannot send one); LAN sources only.
+  oauth_service: true
   notify: true
   dry_run: false
 
@@ -135,5 +142,6 @@ schema:
   browser_backend: list(auto|playwright|qt)
   trigger_port: port
   trigger_token: password?
+  oauth_service: bool
   notify: bool
   dry_run: bool

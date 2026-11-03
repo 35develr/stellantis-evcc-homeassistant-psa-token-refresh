@@ -28,6 +28,7 @@ Standard library only (urllib) - the token helper needs PyQt5/QtWebEngine (Docke
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -47,7 +48,7 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION_FALLBACK = "1.7.1"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.8.0"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -178,6 +179,11 @@ def load_options() -> dict:
         "browser_backend": "auto",
         "trigger_port": 8909,
         "trigger_token": "",
+        # Login service for the Home Assistant integration
+        # (andreadegiovine/homeassistant-stellantis-vehicles): POST /oauth-code
+        # with {url, email, password} returns {"code": ...}. Replaces the shared
+        # Render.com worker. Only reachable from private source addresses.
+        "oauth_service": True,
         "notify": True,
         "dry_run": False,
     }
@@ -844,6 +850,9 @@ class Refresher:
         self.sup = supervisor
         self.control = EvccControl(opts, supervisor)
         self.lock = threading.Lock()
+        # Serialises the login service: one browser at a time, and never in
+        # parallel with a scheduled refresh (both drive the same helper).
+        self.oauth_lock = threading.Lock()
         self.last_mode: str | None = None
         self._api: EvccApi | None = None
         self.api_source = ""
@@ -1303,6 +1312,54 @@ class Refresher:
             return f"proactive renewal (last successful renewal: {age} old)"
         return None
 
+    def oauth_code(self, url: str, email: str, password: str,
+                   deadline: int | None = None) -> str:
+        """Login for a caller-supplied authorize URL, returns the authorization code.
+
+        Contract of the Home Assistant integration's login service
+        (andreadegiovine/homeassistant-stellantis-vehicles): POST {url, email,
+        password} -> {"code": ...}. The URL carries the integration's own
+        client_id and redirect scheme, so the helper must not build its own
+        (no PKCE, no state) and must not exchange the code - the integration
+        does that itself with its own client credentials.
+        """
+        if not url or not email or not password:
+            raise ValueError("url, email and password are required")
+        if not url.startswith("https://"):
+            raise ValueError("url must be an https URL")
+        deadline = int(deadline or self.opts.get("helper_deadline") or 240)
+        cmd = shlex.split(self.opts["helper_cmd"]) + [
+            "-b", self.opts["brand"],
+            "-u", email,
+            "-p", password,
+            "--authorize-url", url,
+            "--code-only",
+            "--deadline", str(deadline),
+            "--backend", str(self.opts.get("browser_backend") or "auto"),
+        ]
+        log(f"login service: fetching an OAuth code for {email} ...")
+        with self.oauth_lock:
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      timeout=deadline + 120, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("login helper hit a hard timeout") from exc
+        code = ""
+        for line in reversed((proc.stdout or "").strip().splitlines()):
+            if line.strip():
+                code = line.strip()
+                break
+        if proc.returncode != 0 or not code:
+            diagnosis = helper_diagnosis() or {}
+            detail = diagnosis.get("deutung") or ""
+            raise RuntimeError(
+                f"login failed (exit {proc.returncode})"
+                + (f": {detail}" if detail else "")
+                + f" - diagnosis: {os.path.join(data_dir(), 'psa-login-debug.json')}"
+            )
+        log(f"login service: code received ({len(code)} characters)")
+        return code
+
     def probe_login(self, wait_seconds: int = 45) -> dict:
         """Visits the login chain without credentials and returns the page dump."""
         cmd = shlex.split(self.opts["helper_cmd"]) + [
@@ -1419,11 +1476,24 @@ class Refresher:
 
 # ------------------------------------------------------------- HTTP trigger
 
+def is_private_address(host: str) -> bool:
+    """True for LAN/loopback sources - the login service is not exposed publicly."""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback or addr.is_link_local
+
+
 def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServer | None:
     token = (opts.get("trigger_token") or "").strip()
-    if not token:
-        log("trigger_token empty - HTTP trigger is disabled (only scheduler active)")
+    oauth_service = bool(opts.get("oauth_service", True))
+    if not token and not oauth_service:
+        log("trigger_token empty and oauth_service off - HTTP server is disabled")
         return None
+    if not token:
+        log("trigger_token empty - /refresh, /status and /dump are disabled; "
+            "only the login service (/oauth-code) is active")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"{LOG_PREFIX}/{VERSION}"
@@ -1454,9 +1524,39 @@ def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServe
                 self._send(200, refresher.diag(dump=True))
             else:
                 self._send(404, {"error": "unknown path",
-                                 "hint": "GET /status, GET /dump, POST /refresh, POST /probe"})
+                                 "hint": "GET /status, GET /dump, POST /refresh, POST /probe, POST /oauth-code"})
+
+        def _oauth_code(self) -> None:
+            """Login service for the HA integration - deliberately without trigger token.
+
+            The integration's config flow sends only {url, email, password}, so this
+            endpoint cannot carry the trigger token. It is therefore restricted to
+            private source addresses and can be switched off with `oauth_service`.
+            """
+            if not oauth_service:
+                self._send(404, {"message": "login service disabled", "code": 404})
+                return
+            if not is_private_address(self.client_address[0]):
+                self._send(403, {"message": "login service is LAN-only", "code": 403})
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except Exception:  # noqa: BLE001
+                self._send(400, {"message": "invalid JSON body", "code": 400})
+                return
+            try:
+                code = refresher.oauth_code(body.get("url"), body.get("email"),
+                                            body.get("password"))
+            except Exception as exc:  # noqa: BLE001
+                self._send(400, {"message": str(exc), "code": 400})
+                return
+            self._send(200, {"code": code})
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.path.startswith("/oauth-code"):
+                self._oauth_code()
+                return
             if not self._authorized():
                 self._send(401, {"error": "invalid or missing trigger token"})
                 return
@@ -1476,7 +1576,7 @@ def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServe
                 return
             if not self.path.startswith("/refresh"):
                 self._send(404, {"error": "unknown path",
-                                 "hint": "POST /refresh | POST /probe | GET /status | GET /dump"})
+                                 "hint": "POST /refresh | POST /probe | POST /oauth-code | GET /status | GET /dump"})
                 return
             if refresher.lock.locked():
                 self._send(409, {"status": "busy", "message": "refresh already running"})
@@ -1499,10 +1599,17 @@ def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServe
         def log_message(self, fmt: str, *args) -> None:
             log(f"HTTP {self.address_string()} {fmt % args}")
 
-    server = ThreadingHTTPServer(("0.0.0.0", int(opts["trigger_port"])), Handler)
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0", int(opts["trigger_port"])), Handler)
+    except OSError as exc:
+        # A busy port must not kill the add-on: the scheduler keeps working, only
+        # the HTTP endpoints (trigger and login service) are unavailable.
+        log(f"WARNING: HTTP server could not bind port {opts['trigger_port']} ({exc}) - "
+            "trigger and login service are unavailable, the scheduler keeps running")
+        return None
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    log(f"HTTP trigger active on port {opts['trigger_port']} "
-        "(POST /refresh, POST /probe, GET /status, GET /dump)")
+    log(f"HTTP server active on port {opts['trigger_port']} "
+        "(POST /refresh, POST /probe, POST /oauth-code, GET /status, GET /dump)")
     return server
 
 

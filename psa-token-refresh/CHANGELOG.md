@@ -1,3 +1,22 @@
+# 1.8.0 (2026-11-03)
+
+- **Local login service for the Home Assistant integration "Stellantis Vehicles".**
+  The integration (andreadegiovine/homeassistant-stellantis-vehicles) fetches its OAuth
+  code from a shared Render.com worker by default; that worker is a free-tier instance
+  and is the usual cause of `Get oauth code error` when a token has to be renewed.
+  The add-on now offers the same contract itself: `POST /oauth-code` with
+  `{url, email, password}` returns `{"code": ...}`. Enter
+  `http://<HA-IP>:<trigger_port>` as **Login service URL** in the integration's
+  remote-login step. New option `oauth_service` (default `true`).
+- The endpoint needs no trigger token (the integration cannot send one) and is therefore
+  restricted to private source addresses; `oauth_service: false` switches it off. It
+  shares the browser lock with the scheduled refresh, so two logins never run at once.
+- The helper gained `--authorize-url` (use the caller's authorize URL instead of building
+  one - the integration has its own client_id and no PKCE) and `--code-only` (print the
+  code, do not exchange it - the integration exchanges it itself).
+- The HTTP server now also starts when `trigger_token` is empty, as long as the login
+  service is enabled; `/refresh`, `/status` and `/dump` stay disabled in that case.
+
 # 1.7.1 (2026-10-21)
 
 - **A restart clears the wait after a failure.** After a failed run the add-on waits

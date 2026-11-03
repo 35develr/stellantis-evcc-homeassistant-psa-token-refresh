@@ -175,7 +175,8 @@ The most important options:
 | `skip_while_charging` | do not renew while a car is charging |
 | `helper_deadline` | overall deadline of the helper in seconds (default 240) |
 | `browser_backend` | engine that performs the login: `auto` (default; Playwright, otherwise Qt, one fail-over), `playwright` or `qt` (amd64 only) |
-| `trigger_token` | password for the HTTP interface, empty = disabled |
+| `trigger_token` | password for the HTTP interface, empty = `/refresh`, `/status`, `/dump` disabled |
+| `oauth_service` | `true` (default) = `POST /oauth-code` login service for the HA integration, LAN only |
 | `dry_run` | do everything, but do not change evcc (result in the log or as a file in `/data`) |
 | `notify` | create notifications in Home Assistant |
 
@@ -341,7 +342,25 @@ If `trigger_token` is set, the add-on listens on `trigger_port` (default 8909):
 | `GET /dump` | like `/status`, plus the actual evcc vehicle configurations and the planned PUT body (tokens as placeholders) |
 
 All calls need the header `X-Trigger-Token: <trigger_token>` (or `?token=`).
-Without `trigger_token` the endpoint is disabled.
+Without `trigger_token` these endpoints are disabled.
+
+### Login service for the HA integration "Stellantis Vehicles"
+
+The integration
+[andreadegiovine/homeassistant-stellantis-vehicles](https://github.com/andreadegiovine/homeassistant-stellantis-vehicles)
+gets its OAuth code from a login service - by default a shared Render.com worker, which is
+the usual cause of `Get oauth code error` on a token renewal. The add-on serves the same
+contract locally (`oauth_service: true`, default):
+
+```
+POST /oauth-code   {"url": "...", "email": "...", "password": "..."}
+-> 200 {"code": "..."}   |   400 {"message": "...", "code": 400}
+```
+
+Enter `http://<HA-IP>:<trigger_port>` (e.g. `http://192.168.10.10:8909`) as **Login
+service URL** in the integration's remote-login step. No trigger token is needed (the
+integration cannot send one), so the endpoint only accepts private source addresses;
+`oauth_service: false` disables it.
 
 ## Security
 

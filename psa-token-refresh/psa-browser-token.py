@@ -584,7 +584,7 @@ class PlaywrightBackend(BrowserBackend):
 
     name = "playwright"
 
-    def __init__(self, oauth_state: str):
+    def __init__(self, oauth_state: str | None):
         self.oauth_state = oauth_state
         self._code = None
         self._requests: list[str] = []
@@ -707,7 +707,7 @@ class QtBackend(BrowserBackend):
 
     name = "qt"
 
-    def __init__(self, oauth_state: str):
+    def __init__(self, oauth_state: str | None):
         self.oauth_state = oauth_state
         self._code = None
         self._requests: list[str] = []
@@ -856,7 +856,7 @@ def choose_backend(choice: str, playwright_available: bool, qt_available: bool) 
     return choice
 
 
-def make_backend(choice: str, oauth_state: str) -> BrowserBackend:
+def make_backend(choice: str, oauth_state: str | None) -> BrowserBackend:
     resolved = choose_backend(choice, have_playwright(), have_qt())
     print(f"[psa] browser backend: {resolved} "
           f"(configured: {choice or 'auto'})", flush=True)
@@ -1044,7 +1044,7 @@ def sync_state_from(backend, state: dict) -> None:
               file=sys.stderr, flush=True)
 
 
-def run_attempt(args, backend_name: str, oauth_state: str, authorize_url: str,
+def run_attempt(args, backend_name: str, oauth_state: str | None, authorize_url: str,
                 state: dict, log) -> tuple[int, bool]:
     """One engine, one try: (exit code, was an authorization code captured?).
 
@@ -1079,6 +1079,11 @@ def run_attempt(args, backend_name: str, oauth_state: str, authorize_url: str,
         return 1, False
 
     if state["code"]:
+        if getattr(args, "code_only", False):
+            # Caller only wants the authorization code (e.g. the Home Assistant
+            # integration, which exchanges it itself with its own client).
+            print(state["code"], flush=True)
+            return 0, True
         print("[psa] exchanging code for tokens ...", flush=True)
         try:
             tokens = exchange_tokens(args.brand, args.country, state["code"], state["verifier"])
@@ -1098,11 +1103,18 @@ def run_attempt(args, backend_name: str, oauth_state: str, authorize_url: str,
 
 def run_browser(args) -> int:
     state = new_attempt_state(args)
-    verifier, challenge = generate_pkce()
-    oauth_state = new_state()
+    if getattr(args, "authorize_url", None):
+        # The caller supplies the URL (e.g. the Home Assistant integration, which
+        # uses its own client_id and redirect scheme). Such a URL carries neither
+        # PKCE nor state; the code is still only taken from the brand scheme.
+        verifier, oauth_state = None, None
+        authorize_url = args.authorize_url
+    else:
+        verifier, challenge = generate_pkce()
+        oauth_state = new_state()
+        authorize_url = build_authorize_url(args.brand, args.country, challenge, oauth_state)
     state["verifier"] = verifier
     state["oauth_state"] = oauth_state
-    authorize_url = build_authorize_url(args.brand, args.country, challenge, oauth_state)
 
     def log(line: str) -> None:
         state["action_log"].append(line)
@@ -1166,7 +1178,7 @@ def dump(state: dict, reason: str) -> None:
 
 
 REQUIRED_ARG_ATTRS = ("brand", "country", "username", "password", "deadline",
-                      "probe", "probe_wait", "backend")
+                      "probe", "probe_wait", "backend", "authorize_url", "code_only")
 
 
 def build_arg_parser() -> "argparse.ArgumentParser":
@@ -1184,6 +1196,11 @@ def build_arg_parser() -> "argparse.ArgumentParser":
                         help="without credentials, only log the page state")
     parser.add_argument("--probe-wait", type=int, default=45,
                         help="wait time for --probe in seconds")
+    parser.add_argument("--authorize-url", dest="authorize_url", default=None,
+                        help="use this authorize URL instead of building one "
+                             "(no PKCE, no state - for callers with their own client)")
+    parser.add_argument("--code-only", dest="code_only", action="store_true",
+                        help="print only the authorization code, do not exchange it")
     parser.add_argument("--backend", choices=("auto", "playwright", "qt"),
                         default=(os.environ.get("PSA_BROWSER") or "auto"),
                         help="browser engine: playwright (default, amd64+aarch64), "
