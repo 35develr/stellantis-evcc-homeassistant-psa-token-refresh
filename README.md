@@ -7,6 +7,15 @@ Peugeot / Opel / Citroën / DS vehicles valid so that **evcc renews them by itse
 when they expire - including stopping and restarting evcc and verifying that it
 really works afterwards.
 
+Since 1.8.0 it also serves the **HACS integration
+[Stellantis Vehicles](https://github.com/andreadegiovine/homeassistant-stellantis-vehicles)**.
+That integration does not log in itself: when it has to re-authenticate it asks a web
+service for the OAuth code, and by default that is a shared Render.com worker on a free
+tier - the usual cause of `Get oauth code error` on a token renewal. Point the
+integration's **Login service URL** at this add-on instead and the login runs on your own
+hardware: no third-party service, no cold starts, and the account credentials never leave
+your network.
+
 ## Features
 
 - **Detect** expired PSA tokens in the evcc log (`token expired`, `invalid_grant`,
@@ -23,6 +32,9 @@ really works afterwards.
   key creation needed).
 - **HTTP trigger** for Home Assistant automations, plus masked `/status` and
   `/dump` diagnostic endpoints.
+- **Login service for the HACS integration "Stellantis Vehicles"**: `POST /oauth-code`
+  with the same contract as the upstream Render worker, LAN-only, no trigger token
+  needed, sharing the browser lock with the scheduled refresh.
 - Home Assistant notifications, a dry-run mode and a retry backoff.
 - **Self-tests** that need neither network nor Docker.
 
