@@ -48,7 +48,9 @@ from evcc_api import EvccApi, EvccApiError, EvccCredentials  # noqa: E402
 from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 
 LOG_PREFIX = "psa-token-refresh"
-VERSION_FALLBACK = "1.8.0"        # only used when the image carries no VERSION file
+# Seconds the login service waits for a running login before answering 409.
+OAUTH_LOCK_WAIT = 20.0
+VERSION_FALLBACK = "1.8.1"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -1338,12 +1340,18 @@ class Refresher:
             "--backend", str(self.opts.get("browser_backend") or "auto"),
         ]
         log(f"login service: fetching an OAuth code for {email} ...")
-        with self.oauth_lock:
+        # Wait a little for a running login (e.g. the scheduled refresh or a second
+        # click), then answer instead of blocking until the caller gives up.
+        if not self.oauth_lock.acquire(timeout=OAUTH_LOCK_WAIT):
+            raise TimeoutError("another login is already running - try again in a minute")
+        try:
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True,
                                       timeout=deadline + 120, check=False)
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError("login helper hit a hard timeout") from exc
+        finally:
+            self.oauth_lock.release()
         code = ""
         for line in reversed((proc.stdout or "").strip().splitlines()):
             if line.strip():
@@ -1548,13 +1556,20 @@ def start_trigger_server(refresher: Refresher, opts: dict) -> ThreadingHTTPServe
             try:
                 code = refresher.oauth_code(body.get("url"), body.get("email"),
                                             body.get("password"))
+            except TimeoutError as exc:
+                # A second login while one is running: answer instead of queueing
+                # behind it (the integration gives up after 300 s).
+                self._send(409, {"message": str(exc), "code": 409})
+                return
             except Exception as exc:  # noqa: BLE001
                 self._send(400, {"message": str(exc), "code": 400})
                 return
             self._send(200, {"code": code})
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path.startswith("/oauth-code"):
+            # "/" is the path the upstream worker serves and therefore the URL most
+            # people already have in the integration - accept it as an alias.
+            if self.path.startswith("/oauth-code") or self.path in ("/", ""):
                 self._oauth_code()
                 return
             if not self._authorized():

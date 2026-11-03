@@ -1,3 +1,14 @@
+# 1.8.1 (2026-11-03)
+
+- **`POST /` works as an alias for `/oauth-code`.** The integration sends its request to
+  whatever URL is configured, without appending a path - and the upstream worker serves
+  `/`. Entering `http://<HA-IP>:8909` therefore hit the trigger-token check and returned
+  401 (`invalid or missing trigger token`). Both paths now serve the login service.
+- **A second login answers with 409 instead of queueing.** The login service used to wait
+  for a running login without limit; the integration gives up after 300 s, so a stuck run
+  looked like a timeout with no message. It now waits `OAUTH_LOCK_WAIT` (20 s) and then
+  answers `409 {"message": "another login is already running ..."}`.
+
 # 1.8.0 (2026-11-03)
 
 - **Local login service for the Home Assistant integration "Stellantis Vehicles".**

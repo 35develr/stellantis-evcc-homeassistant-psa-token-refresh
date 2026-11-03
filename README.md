@@ -369,7 +369,7 @@ POST /oauth-code   {"url": "...", "email": "...", "password": "..."}
 -> 200 {"code": "..."}   |   400 {"message": "...", "code": 400}
 ```
 
-Enter `http://<HA-IP>:<trigger_port>` (e.g. `http://192.168.10.10:8909`) as **Login
+Enter `http://<HA-IP>:<trigger_port>/oauth-code` (e.g. `http://192.168.10.10:8909/oauth-code`) as **Login
 service URL** in the integration's remote-login step. No trigger token is needed (the
 integration cannot send one), so the endpoint only accepts private source addresses;
 `oauth_service: false` disables it.

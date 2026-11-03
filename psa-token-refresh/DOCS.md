@@ -89,9 +89,11 @@ POST /oauth-code
 -> 200 {"code": "..."}      (or 400 {"message": "...", "code": 400})
 ```
 
-In the integration's remote-login step enter `http://<HA-IP>:<trigger_port>` as
-**Login service URL** (e.g. `http://192.168.10.10:8909`). The URL is stored in the config
-entry, so it survives a reauth.
+In the integration's remote-login step enter `http://<HA-IP>:<trigger_port>/oauth-code` as
+**Login service URL** (e.g. `http://192.168.10.10:8909/oauth-code`). The URL is stored in
+the config entry, so it survives a reauth. The bare host (`/`) works as well - the
+integration sends no path of its own, and the upstream worker serves `/` - but the
+explicit path is less ambiguous.
 
 - No trigger token: the integration cannot send one. The endpoint is therefore only
   reachable from private source addresses (LAN, loopback, Docker networks) and can be

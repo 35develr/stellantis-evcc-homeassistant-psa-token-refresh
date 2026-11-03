@@ -84,9 +84,9 @@ def start(opts):
     refresher = orchestrator.Refresher(opts, orchestrator.Supervisor(opts))
     server = orchestrator.start_trigger_server(refresher, opts)
     if server is None:
-        return None, None
+        return None, None, refresher
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server, f"http://127.0.0.1:{server.server_address[1]}"
+    return server, f"http://127.0.0.1:{server.server_address[1]}", refresher
 
 
 def post(base, path, payload):
@@ -104,7 +104,7 @@ AUTHORIZE = ("https://idpcvs.peugeot.com/am/oauth2/authorize?client_id=abc"
              "&response_type=code&redirect_uri=mymap%3A%2F%2Foauth2redirect%2Fde")
 
 print("== 1/2 success and helper arguments")
-server, base = start(make_opts())
+server, base, refresher = start(make_opts())
 check("server started without trigger_token", server is not None)
 status, body = post(base, "/oauth-code",
                     {"url": AUTHORIZE, "email": "konto@example.org", "password": "geheim"})
@@ -117,7 +117,7 @@ check("credentials passed", "konto@example.org" in argv and "geheim" in argv, st
 server.shutdown()
 
 print("== 3 missing fields")
-server, base = start(make_opts())
+server, base, refresher = start(make_opts())
 status, body = post(base, "/oauth-code", {"url": AUTHORIZE, "email": "konto@example.org"})
 check("HTTP 400", status == 400, f"got {status}")
 check("message names the missing field", "password" in str(body.get("message", "")), str(body))
@@ -128,7 +128,7 @@ server.shutdown()
 
 print("== 4 helper failure")
 os.environ["STUB_FAIL"] = "1"
-server, base = start(make_opts())
+server, base, refresher = start(make_opts())
 status, body = post(base, "/oauth-code",
                     {"url": AUTHORIZE, "email": "konto@example.org", "password": "geheim"})
 check("HTTP 400 on helper failure", status == 400, f"got {status}")
@@ -138,12 +138,27 @@ server.shutdown()
 os.environ.pop("STUB_FAIL", None)
 
 print("== 5 oauth_service off")
-server, base = start(make_opts(oauth_service=False))
+server, base, refresher = start(make_opts(oauth_service=False))
 check("no server at all when trigger_token is empty too", server is None)
-server, base = start(make_opts(oauth_service=False, trigger_token="tok"))
+server, base, refresher = start(make_opts(oauth_service=False, trigger_token="tok"))
 status, body = post(base, "/oauth-code",
                     {"url": AUTHORIZE, "email": "konto@example.org", "password": "geheim"})
 check("HTTP 404 when disabled", status == 404, f"got {status} {body}")
+server.shutdown()
+
+print("== 7 root alias (the upstream worker serves POST /) and busy handling")
+server, base, refresher = start(make_opts())
+status, body = post(base, "/", {"url": AUTHORIZE, "email": "konto@example.org",
+                                "password": "geheim"})
+check("POST / works as alias", status == 200 and body.get("code") == "THE-CODE-123",
+      f"got {status} {body}")
+orchestrator.OAUTH_LOCK_WAIT = 1
+refresher.oauth_lock.acquire()
+status, body = post(base, "/", {"url": AUTHORIZE, "email": "konto@example.org",
+                                "password": "geheim"})
+refresher.oauth_lock.release()
+check("a running login yields 409 instead of hanging", status == 409, f"got {status} {body}")
+check("409 message says it is busy", "already running" in str(body.get("message", "")), str(body))
 server.shutdown()
 
 print("== 6 LAN restriction")
