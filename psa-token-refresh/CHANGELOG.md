@@ -1,3 +1,19 @@
+# 1.8.3 (2026-11-13)
+
+- **The add-on no longer identifies itself as the evcc add-on.** `GET /addons` also lists
+  the running PSA add-on, whose name contains "evcc". The old scoring gave any name
+  containing "evcc" 50 points, so `evcc_control: auto` resolved to the PSA add-on's own
+  slug and stopped the add-on itself. The own slug is now excluded and only a real evcc
+  add-on (slug exactly `evcc`, a slug ending/starting with `evcc`, or the name `evcc`) is
+  accepted.
+- **External evcc is detected via its API.** If the Supervisor knows no evcc add-on (or
+  only a stopped one), `auto` now probes `GET <evcc_url>/api/state` and selects `api` when
+  evcc answers. Previously it selected `none` and left the external evcc running during
+  the login window.
+- **Last safety net in `stop()`.** If the resolved slug is still this add-on, the stop is
+  refused and logged instead of switching the add-on off.
+- Tests cover self-only, self+evcc, external evcc, stopped evcc add-on and the stop guard.
+
 # 1.8.2 (2026-11-03)
 
 - **The login service now logs why a login failed.** The helper's output was captured and

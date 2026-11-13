@@ -1,5 +1,5 @@
 name: "Stellantis/PSA Token Refresh for evcc"
-version: "1.8.2"
+version: "1.8.3"
 slug: "psa_token_refresh"
 description: >-
   Automatically renews the PSA/Stellantis tokens (Peugeot, Citroen, DS, Opel)
@@ -55,7 +55,9 @@ options:
   # "Missing required option 'evcc_slug'" (report of 2026-10-13).
   evcc_slug: auto
   # How evcc is stopped and restarted:
-  #   auto       = supervisor if the Supervisor knows an evcc add-on - otherwise none
+  #   auto       = supervisor if the Supervisor knows a real evcc add-on and it is
+  #                running; otherwise api if the evcc API answers (external evcc);
+  #                otherwise none. This add-on itself never counts as evcc.
   #   supervisor = via the Supervisor API (evcc runs as an add-on)
   #   api        = POST /api/system/shutdown; the restart is done by a process manager
   #                (docker 'restart: always', systemd 'Restart=always', NSSM) or by the

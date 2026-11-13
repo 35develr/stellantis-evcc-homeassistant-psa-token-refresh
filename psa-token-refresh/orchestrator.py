@@ -34,6 +34,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -50,7 +51,7 @@ from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 LOG_PREFIX = "psa-token-refresh"
 # Seconds the login service waits for a running login before answering 409.
 OAUTH_LOCK_WAIT = 20.0
-VERSION_FALLBACK = "1.8.2"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.8.3"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:
@@ -287,6 +288,11 @@ class Supervisor:
         self._slug: str | None = None
         self._prefix = "addons"
         self.apps: list[dict] = []
+        # Identity of this add-on. GET /addons also lists the running add-on
+        # itself, and its name contains "evcc" - without this exclusion the
+        # add-on identifies itself as the evcc add-on and stops itself.
+        self._self_slug: str | None = None
+        self._self_name: str | None = None
 
     # -------------------------------------------------------------- API
 
@@ -321,16 +327,77 @@ class Supervisor:
                 return apps
         return []
 
+    def self_slug(self) -> str:
+        """Slug of this add-on - not the slug of the evcc add-on."""
+        if self._self_slug is not None:
+            return self._self_slug
+        slug = ""
+        try:
+            info = self.self_info()
+            slug = str(info.get("slug") or "").strip()
+        except Exception:  # noqa: BLE001
+            slug = ""
+        if not slug:
+            # In the add-on container the hostname is the slug. This is the
+            # fallback when /addons/self/info does not answer.
+            slug = socket.gethostname().strip()
+        self._self_slug = slug
+        return slug
+
+    def self_name(self) -> str:
+        """Display name of this add-on."""
+        if self._self_name is not None:
+            return self._self_name
+        name = ""
+        try:
+            name = str(self.self_info().get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            name = ""
+        self._self_name = name
+        return name
+
+    def _is_self(self, app: dict) -> bool:
+        """Is this add-on entry the running PSA add-on itself?"""
+        slug = str(app.get("slug") or "").strip().lower()
+        name = str(app.get("name") or "").strip().lower()
+        own = self.self_slug().lower()
+        own_name = self.self_name().lower()
+        if own and slug and slug == own:
+            return True
+        # The Supervisor slug may carry a repository prefix
+        # ("f2d2e21d_psa_token_refresh" vs. "psa_token_refresh").
+        if own and slug and (slug.endswith("_" + own) or slug.endswith("-" + own)):
+            return True
+        if own and slug and (own.endswith("_" + slug) or own.endswith("-" + slug)):
+            return True
+        if own_name and name and name == own_name:
+            return True
+        return False
+
     def resolve_slug(self, reload: bool = False) -> str:
-        """Determines the slug of the evcc add-on."""
+        """Determines the slug of the evcc add-on.
+
+        This add-on is itself listed in GET /addons and carries "evcc" in its
+        name. It must never count as the evcc add-on - otherwise the PSA
+        add-on stops itself. A name fragment is not enough either: the match
+        must be an add-on named "evcc" or one whose slug starts/ends with
+        "evcc", not one that merely mentions "evcc".
+        """
         configured = (self.opts.get("evcc_slug") or "").strip()
         apps = self.list_apps(reload=reload)
+        own = self.self_slug().lower()
+
         if configured and configured != "auto":
-            if not apps or any(str(a.get("slug")) == configured for a in apps):
+            if own and configured.lower() == own:
+                log(f"WARNING: evcc_slug '{configured}' is this PSA add-on itself - "
+                    "ignored")
+                configured = ""
+            elif not apps or any(str(a.get("slug")) == configured for a in apps):
                 self._slug = configured
                 return configured
-            log(f"WARNING: evcc_slug '{configured}' is not installed per Supervisor - "
-                "searching for the evcc add-on automatically")
+            else:
+                log(f"WARNING: evcc_slug '{configured}' is not installed per Supervisor - "
+                    "searching for the evcc add-on automatically")
         if apps:
             names = ", ".join(
                 f"{a.get('name', '?')} ({a.get('slug', '?')}, {a.get('state', '?')})" for a in apps
@@ -338,20 +405,25 @@ class Supervisor:
             log(f"Supervisor knows {len(apps)} add-on(s): {names}")
 
         def score(app: dict) -> int:
+            # This add-on is never the candidate.
+            if self._is_self(app):
+                return 0
             slug = str(app.get("slug", "")).lower()
             name = str(app.get("name", "")).lower()
             if slug == "evcc":
                 return 100
-            if slug.endswith("evcc") or slug.endswith("_evcc") or slug.endswith("-evcc"):
-                return 80
+            if slug.endswith("_evcc") or slug.endswith("-evcc"):
+                return 90
+            if slug.startswith("evcc_") or slug.startswith("evcc-"):
+                return 85
             if name == "evcc":
+                return 80
+            if name.startswith("evcc ") or name.startswith("evcc -") or name.startswith("evcc –"):
                 return 70
-            if "evcc" in slug or "evcc" in name:
-                return 50
             return 0
 
-        candidates = sorted(apps, key=score, reverse=True)
-        if candidates and score(candidates[0]) > 0:
+        candidates = sorted((a for a in apps if score(a) > 0), key=score, reverse=True)
+        if candidates:
             slug = candidates[0]["slug"]
             if configured and configured not in ("", "auto") and configured != slug:
                 log(f"WARNING: evcc_slug '{configured}' is not installed - "
@@ -539,8 +611,10 @@ class EvccControl:
                 shell command - the add-on never executes arbitrary commands.
     none:       evcc is never touched; the add-on only writes.
 
-    `auto` (default) picks supervisor when the Supervisor knows an evcc add-on - otherwise
-    none. A foreign evcc is never shut down on its own.
+    `auto` (default) picks supervisor only when the Supervisor knows a real evcc
+    add-on and it is running. If there is no evcc add-on (or it is stopped) and the
+    evcc API answers, it picks api - that is an external evcc. Otherwise none. This
+    add-on itself is never treated as evcc.
     """
 
     MODES = ("auto", "supervisor", "api", "webhook", "none")
@@ -566,24 +640,64 @@ class EvccControl:
         """Drop the resolved mode (after the options changed)."""
         self._mode = None
 
+    def api_reachable(self, timeout: int = 3) -> bool:
+        """Does an evcc answer on its API? 200/401/403 count as 'running'."""
+        url = str(self.opts.get("evcc_url") or "http://127.0.0.1:7070").rstrip("/")
+        try:
+            status, _ = http_request(url + "/api/state", timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return False
+        return status in (200, 401, 403)
+
     def resolve(self) -> str:
-        """Operating mode for this run (evaluates 'auto', remembers the result)."""
+        """Operating mode for this run (evaluates 'auto', remembers the result).
+
+        'auto' decides in this order:
+          1. a real evcc add-on in the Supervisor   -> supervisor
+          2. no evcc add-on, but the evcc API answers -> api (external evcc)
+          3. otherwise                               -> none
+        This add-on is excluded; its name contains "evcc".
+        """
         if self._mode:
             return self._mode
         mode = self.configured()
         if mode == "auto":
             mode = "none"
+            found = False
             if self.sup.available:
                 try:
-                    self.sup.resolve_slug()
-                    mode = "supervisor"
+                    slug = self.sup.resolve_slug()
+                    if slug:
+                        state = ""
+                        for app in self.sup.apps:
+                            if str(app.get("slug")) == slug:
+                                state = str(app.get("state") or "")
+                                break
+                        # An installed but stopped evcc add-on is not a running
+                        # evcc. If the API still answers, an external evcc is
+                        # running - use 'api', not 'supervisor'.
+                        if state == "started" or not self.api_reachable():
+                            mode = "supervisor"
+                            found = True
+                            log(f"evcc control: supervisor (evcc add-on '{slug}', "
+                                f"state {state or '?'})")
+                        else:
+                            mode = "api"
+                            found = True
+                            log(f"evcc add-on '{slug}' is stopped, but the evcc API "
+                                "answers - this is an external evcc (evcc_control: api)")
                 except Exception as exc:  # noqa: BLE001
                     log(f"no evcc add-on found ({exc})")
-                    log("evcc is NOT stopped (evcc_control: auto). For an evcc that runs "
-                        "outside Home Assistant set 'evcc_control: api' (process manager/"
-                        "watchdog) or 'webhook'.")
             else:
-                log("no Supervisor access - evcc is not stopped (evcc_control: auto)")
+                log("no Supervisor access - checking whether an external evcc runs")
+            if not found:
+                if self.api_reachable():
+                    mode = "api"
+                    log("evcc API answers, but the Supervisor knows no evcc add-on - "
+                        "this is an external evcc (evcc_control: api)")
+                else:
+                    log("evcc API does not answer - evcc is not stopped "
+                        "(evcc_control: auto)")
         self._mode = mode
         return mode
 
@@ -595,6 +709,18 @@ class EvccControl:
     def stop(self, api: "EvccApi | None" = None) -> bool:
         mode = self.resolve()
         if mode == "supervisor":
+            # Last safety net: never stop this add-on itself. If the resolved
+            # slug is the PSA add-on, the detection is wrong - doing nothing is
+            # better than switching itself off.
+            try:
+                slug = self.sup._slug or self.sup.resolve_slug()
+            except Exception:  # noqa: BLE001
+                slug = ""
+            if slug and self.sup._is_self({"slug": slug}):
+                log("ERROR: resolved evcc slug is this PSA add-on itself - evcc is "
+                    "not stopped. Set 'evcc_control: api' or point 'evcc_slug' at "
+                    "the real evcc add-on.")
+                return False
             return self.sup.stop_evcc()
         if mode in ("api", "webhook"):
             if api is None:
