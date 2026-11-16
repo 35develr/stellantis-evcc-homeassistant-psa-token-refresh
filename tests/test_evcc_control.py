@@ -385,17 +385,17 @@ def test_api_mode_without_restart_policy_fails_clearly():
     shutil.rmtree(workdir, ignore_errors=True)
 
 
-def test_auto_without_evcc_addon_writes_without_stopping():
-    """Without an evcc add-on, auto does not stop anything - it only writes."""
+def test_auto_without_evcc_addon_uses_api_when_evcc_answers():
+    """Without an evcc add-on, auto uses the evcc API - it is an external evcc."""
     # drop evcc_slug as well: otherwise the add-on assumes the configured slug is installed
     proc, workdir = run_orchestrator({"evcc_slug": None}, sup_apps=[
         {"name": "Mosquitto broker", "slug": "core_mosquitto", "state": "started"}])
     check(proc.returncode == 0, f"exit {proc.returncode}\n{proc.out[-2500:]}")
-    check("shutdown" not in EVENTS, f"evcc was shut down anyway: {EVENTS}")
+    check("shutdown" in EVENTS, f"external evcc was not shut down: {EVENTS}")
     check("sup-stop" not in EVENTS, f"the Supervisor was used: {EVENTS}")
     check(len(STATE["writes"]) == 1, f"expected 1 PUT, got {STATE['writes']}")
-    check("no evcc add-on" in proc.out.lower() or "evcc_control: auto" in proc.out,
-          f"no hint about skipping the stop:\n{proc.out[-1500:]}")
+    check("external evcc" in proc.out.lower(),
+          f"no hint that an external evcc was detected:\n{proc.out[-1500:]}")
     check(EVCC["server"] is not None, "evcc is no longer running")
     shutil.rmtree(workdir, ignore_errors=True)
 

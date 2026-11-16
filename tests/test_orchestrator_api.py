@@ -176,6 +176,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._send(401, {"error": "unauthorized"})
             return
+        if self.path == "/api/system/shutdown":
+            # The external evcc is stopped via the API; in the test the fake
+            # server stays up so the following write can still run.
+            self._send(204, "")
+            return
         body = self._body()
         if self.path.startswith("/api/config/test/vehicle/merge/"):
             STATE["tests"].append(body)
