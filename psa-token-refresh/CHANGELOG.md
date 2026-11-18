@@ -1,3 +1,13 @@
+# 1.8.5 (2026-11-18)
+
+- **A closed evcc log no longer fails the refresh.** `GET /api/system/log` is a
+  streaming endpoint. While evcc is restarted by the process manager, it closes the
+  socket before the response headers arrive, which urllib reports as
+  `Remote end closed connection without response` (issue #4). The log read now waits
+  for evcc to be ready, retries once and then returns an empty log instead of raising.
+  In that case the refresh itself had already succeeded - only the verification log
+  was missing.
+
 # 1.8.4 (2026-11-16)
 
 - **One version for both build lines.** 1.8.3 was published twice with different

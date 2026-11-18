@@ -51,7 +51,7 @@ from patch_evcc_yaml import PatchError, patch_evcc_yaml  # noqa: E402
 LOG_PREFIX = "psa-token-refresh"
 # Seconds the login service waits for a running login before answering 409.
 OAUTH_LOCK_WAIT = 20.0
-VERSION_FALLBACK = "1.8.4"        # only used when the image carries no VERSION file
+VERSION_FALLBACK = "1.8.5"        # only used when the image carries no VERSION file
 
 
 def _read_version() -> str:

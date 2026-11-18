@@ -10,6 +10,7 @@ Usage: python3 tests/test_evcc_api.py
 
 import json
 import os
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from evcc_api import EvccApi, EvccApiError  # noqa: E402
 
 API_KEY = "testkey123"
-STATE = {"writes": [], "tests": [], "auth_seen": [], "dirty": True}
+STATE = {"writes": [], "tests": [], "auth_seen": [], "dirty": True,
+         "log_mode": "ok", "log_drops": 0}
 
 VEHICLE_LIST = [
     {"name": "db:5", "type": "template", "id": 5,
@@ -45,6 +47,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_raw(self, code, text):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _body(self):
         length = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(length) or b"{}")
@@ -63,6 +73,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._auth_ok():
             self._send(401, {"error": "unauthorized"})
+            return
+        if self.path == "/api/system/log":
+            # evcc's log endpoint is a streaming endpoint. While evcc restarts it
+            # closes the socket before the response headers arrive - exactly the
+            # race that produced "Remote end closed connection without response".
+            mode = STATE.get("log_mode", "ok")
+            if mode == "drop" or (mode == "drop_once" and STATE["log_drops"] > 0):
+                if mode == "drop_once":
+                    STATE["log_drops"] -= 1
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self.connection.close()
+                return
+            self._send_raw(200, "2026-11-18 19:15:43 evcc ready\n")
             return
         if self.path == "/api/config/devices/vehicle":
             self._send(200, VEHICLE_LIST)
@@ -249,6 +276,35 @@ def test_auth_header_used_on_writes():
 def test_dirty_flag_readable():
     api = client(apikey=API_KEY)
     check(api.config_dirty() is True, "dirty flag not read")
+
+
+def test_log_returns_text():
+    STATE["log_mode"] = "ok"
+    api = client(apikey=API_KEY)
+    check("evcc ready" in api.log(), "log text missing")
+
+
+def test_log_dropped_connection_is_not_fatal():
+    """evcc closes /api/system/log without a response while it restarts.
+    The add-on must not fail the refresh because of that (issue #4)."""
+    STATE["log_mode"] = "drop"
+    api = client(apikey=API_KEY)
+    try:
+        check(api.log() == "", "a dropped log connection must return an empty log")
+    finally:
+        STATE["log_mode"] = "ok"
+
+
+def test_log_retries_once_after_a_drop():
+    STATE["log_mode"] = "drop_once"
+    STATE["log_drops"] = 1
+    api = client(apikey=API_KEY)
+    try:
+        check("evcc ready" in api.log(), "log was not fetched after the retry")
+        check(STATE["log_drops"] == 0, "the retry did not happen")
+    finally:
+        STATE["log_mode"] = "ok"
+        STATE["log_drops"] = 0
 
 
 def main():

@@ -307,11 +307,29 @@ class EvccApi:
             raise EvccApiError("evcc rejected the current admin password (HTTP 400)")
         raise EvccApiError(f"setting password failed (HTTP {status}): {text.strip()[:200]}")
 
-    def log(self, max_bytes: int = 80000) -> str:
-        status, text = self.request("GET", "/api/system/log")
-        if status != 200:
-            return ""
-        return text[-max_bytes:]
+    def log(self, max_bytes: int = 80000, retries: int = 1) -> str:
+        """Reads the evcc log - never fatal.
+
+        `/api/system/log` is a streaming endpoint. While evcc is shutting down or
+        starting up (the add-on restarts it through the process manager), the
+        socket can be closed before the response headers arrive; urllib then
+        raises `http.client.RemoteDisconnected` ("Remote end closed connection
+        without response"). That is a race with the restart, not a token or
+        config problem, so it must not fail the refresh. Wait for evcc to be
+        ready again and retry once, then return an empty log.
+        """
+        for versuch in range(retries + 1):
+            try:
+                status, text = self.request("GET", "/api/system/log", timeout=10)
+                if status == 200:
+                    return text[-max_bytes:]
+                return ""
+            except EvccApiError:
+                if versuch < retries:
+                    self.wait_until_ready(timeout=15, interval=1.0)
+                    continue
+                return ""
+        return ""
 
     def config_dirty(self) -> bool | None:
         try:
